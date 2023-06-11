@@ -57,6 +57,7 @@ struct ggml_metal_context {
     GGML_METAL_DECL_KERNEL(get_rows_q5_k);
     GGML_METAL_DECL_KERNEL(get_rows_q6_k);
     GGML_METAL_DECL_KERNEL(rms_norm);
+    GGML_METAL_DECL_KERNEL(norm);
     GGML_METAL_DECL_KERNEL(mul_mat_f16_f32);
     GGML_METAL_DECL_KERNEL(mul_mat_q4_0_f32);
     GGML_METAL_DECL_KERNEL(mul_mat_q4_1_f32);
@@ -162,6 +163,7 @@ struct ggml_metal_context * ggml_metal_init(void) {
         GGML_METAL_ADD_KERNEL(get_rows_q5_k);
         GGML_METAL_ADD_KERNEL(get_rows_q6_k);
         GGML_METAL_ADD_KERNEL(rms_norm);
+        GGML_METAL_ADD_KERNEL(norm);
         GGML_METAL_ADD_KERNEL(mul_mat_f16_f32);
         GGML_METAL_ADD_KERNEL(mul_mat_q4_0_f32);
         GGML_METAL_ADD_KERNEL(mul_mat_q4_1_f32);
@@ -700,6 +702,28 @@ void ggml_metal_graph_compute(
                     const int nth = 256;
 
                     [encoder setComputePipelineState:ctx->pipeline_rms_norm];
+                    [encoder setBuffer:id_src0 offset:offs_src0 atIndex:0];
+                    [encoder setBuffer:id_dst  offset:offs_dst  atIndex:1];
+                    [encoder setBytes:&ne00 length:sizeof( int64_t) atIndex:2];
+                    [encoder setBytes:&nb01 length:sizeof(uint64_t) atIndex:3];
+                    [encoder setBytes:&eps  length:sizeof(   float) atIndex:4];
+                    [encoder setThreadgroupMemoryLength:nth*sizeof(float) atIndex:0];
+
+                    const int64_t nrows = ggml_nrows(src0);
+
+                    [encoder dispatchThreadgroups:MTLSizeMake(nrows, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+                } break;
+            case GGML_OP_NORM:
+                {
+                    if (encoder == nil) {
+                        encoder = [command_buffer computeCommandEncoder];
+                    }
+
+                    const float eps = 1e-5f;
+
+                    const int nth = 256;
+
+                    [encoder setComputePipelineState:ctx->pipeline_norm];
                     [encoder setBuffer:id_src0 offset:offs_src0 atIndex:0];
                     [encoder setBuffer:id_dst  offset:offs_dst  atIndex:1];
                     [encoder setBytes:&ne00 length:sizeof( int64_t) atIndex:2];
