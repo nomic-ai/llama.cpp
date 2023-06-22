@@ -9,6 +9,8 @@
 #  include "ggml-cuda.h"
 #elif defined(GGML_USE_CLBLAST)
 #  include "ggml-opencl.h"
+#elif defined(GGML_USE_KOMPUTE)
+#   include "ggml-vulkan.h"
 #endif
 
 #ifdef GGML_USE_METAL
@@ -1183,11 +1185,14 @@ struct llama_context {
 
 #ifdef GGML_USE_METAL
     ggml_metal_context * ctx_metal = NULL;
+#elif defined(GGML_USE_KOMPUTE)
+    ggml_kompute_context * ctx_kompute = NULL;
 #endif
 
 #ifdef GGML_USE_MPI
     ggml_mpi_context * ctx_mpi = NULL;
 #endif
+
 };
 
 //
@@ -2486,6 +2491,9 @@ static struct ggml_cgraph * llm_build_llama(
 
     struct ggml_tensor * cur;
     struct ggml_tensor * inpL;
+#if defined(GGML_USE_KOMPUTE)
+    struct ggml_tensor * toDeviceTensor = nullptr;
+#endif
 
     if (tokens) {
         struct ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N);
@@ -2495,6 +2503,9 @@ static struct ggml_cgraph * llm_build_llama(
             memcpy(inp_tokens->data, tokens, N*ggml_element_size(inp_tokens));
         }
         ggml_set_name(inp_tokens, "inp_tokens");
+#if defined(GGML_USE_KOMPUTE)
+        toDeviceTensor = inp_tokens;
+#endif
 
         inpL = ggml_get_rows(ctx0, model.tok_embeddings, inp_tokens);
     } else {
@@ -2503,6 +2514,9 @@ static struct ggml_cgraph * llm_build_llama(
 #endif
 
         inpL = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, N);
+#if defined(GGML_USE_KOMPUTE)
+        toDeviceTensor = inpL;
+#endif
 
         ggml_allocr_alloc(lctx.alloc, inpL);
         if (!ggml_allocr_is_measure(lctx.alloc)) {
@@ -2705,7 +2719,6 @@ static struct ggml_cgraph * llm_build_llama(
                 offload_func(cur);
                 ggml_set_name(cur, "ffn_norm");
             }
-
             struct ggml_tensor * tmp = ggml_mul_mat(ctx0,
                     model.layers[il].w3,
                     cur);
@@ -2763,6 +2776,16 @@ static struct ggml_cgraph * llm_build_llama(
     ggml_build_forward_expand(gf, cur);
 
     ggml_free(ctx0);
+
+#if defined(GGML_USE_KOMPUTE)
+    if (lctx.ctx_kompute && N == 1) {
+        if (!ggml_vk_has_h2d_all(lctx.ctx_kompute)) {
+            ggml_vk_h2d_all(lctx.ctx_kompute);
+        } else {
+            ggml_vk_h2d_tensor(lctx.ctx_kompute, toDeviceTensor);
+        }
+    }
+#endif
 
     return gf;
 }
@@ -3795,6 +3818,17 @@ static bool llama_eval_internal(
     } else {
         ggml_graph_compute_helper(lctx.work_buffer, gf, n_threads);
     }
+#elif defined(GGML_USE_KOMPUTE)
+    if (lctx.ctx_kompute && N == 1) {
+        ggml_vk_graph_compute(lctx.ctx_kompute, gf);
+        ggml_vk_d2h_tensor(lctx.ctx_kompute, res);
+    } else {
+        ggml_graph_compute_helper(lctx.work_buffer, gf, n_threads);
+        if (lctx.ctx_kompute) {
+            ggml_vk_h2d_tensor(lctx.ctx_kompute, kv_self.k);
+            ggml_vk_h2d_tensor(lctx.ctx_kompute, kv_self.v);
+        }
+    }
 #else
     ggml_graph_compute_helper(lctx.work_buffer, gf, n_threads);
 #endif
@@ -3836,12 +3870,12 @@ static bool llama_eval_internal(
     }
 
     // extract embeddings
-    if (!lctx.embedding.empty()) {
-        auto & embedding_out = lctx.embedding;
+    //if (!lctx.embedding.empty()) {
+    //    auto & embedding_out = lctx.embedding;
 
-        embedding_out.resize(n_embd);
-        memcpy(embedding_out.data(), (float *) ggml_get_data(embeddings) + (n_embd*(N - 1)), sizeof(float)*n_embd);
-    }
+    //    embedding_out.resize(n_embd);
+    //    memcpy(embedding_out.data(), (float *) ggml_get_data(embeddings) + (n_embd*(N - 1)), sizeof(float)*n_embd);
+    //}
 
     // measure the performance only for the single-token evals
     if (N == 1) {
@@ -5906,6 +5940,7 @@ static int llama_apply_lora_from_file_internal(
     const struct llama_model & model, const char * path_lora, const char * path_base_model, int n_threads
 ) {
     LLAMA_LOG_INFO("%s: applying lora adapter from '%s' - please wait ...\n", __func__, path_lora);
+
 
     const int64_t t_start_lora_us = ggml_time_us();
 
