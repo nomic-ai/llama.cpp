@@ -85,7 +85,11 @@ option(LLAMA_QKK_64                          "llama: use super-block size of 64 
 option(LLAMA_BUILD_TESTS                "llama: build tests"    ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES             "llama: build examples" ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER               "llama: build server example"                           ON)
+option(LLAMA_QUIET                      "llama: disable debugging output"                       OFF)
 
+if (LLAMA_QUIET)
+    add_compile_definitions(LLAMA_QUIET)
+endif()
 #
 # Build info header
 #

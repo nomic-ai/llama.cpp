@@ -18,6 +18,10 @@
 #define metal_printf(...) fprintf(stderr, __VA_ARGS__)
 #endif
 
+#if defined(LLAMA_QUIET)
+#define fprintf(...)
+#endif
+
 #define UNUSED(x) (void)(x)
 
 #define GGML_MAX_CONCUR (2*GGML_MAX_NODES)

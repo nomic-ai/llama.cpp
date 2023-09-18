@@ -66,6 +66,9 @@
 #define LLAMA_MAX_SCRATCH_BUFFERS 16
 #endif
 
+#if defined(LLAMA_QUIET)
+#define fprintf(...)
+#endif
 
 // available llama models
 enum e_model {

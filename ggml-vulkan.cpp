@@ -311,8 +311,10 @@ void ggml_vk_allocate_descriptor_pool(struct ggml_kompute_context * ctx, size_t 
     ctx->pool = std::make_shared<vk::DescriptorPool>();
     vk::Result r = komputeManager()->device()->createDescriptorPool(
       &descriptorPoolInfo, nullptr, ctx->pool.get());
+    #ifndef LLAMA_QUIET
     if (r != vk::Result::eSuccess)
-        std::cerr << "Error allocating descriptor pool" << vk::to_string(r);
+        std::cerr << "Error allocating descriptor pool" << vk::to_string(r); 
+    #endif
 }
 
 static
@@ -336,8 +338,10 @@ vk::Buffer *ggml_vk_allocate_buffer(size_t size) {
 
     vk::Buffer *vkBuffer = new vk::Buffer;
     vk::Result r = komputeManager()->device()->createBuffer(&bufferCreateInfo, nullptr, vkBuffer);
+    #ifndef LLAMA_QUIET
     if (r != vk::Result::eSuccess)
         std::cerr << "Error allocating buffer " << vk::to_string(r) << std::endl;
+    #endif
     return vkBuffer;
 }
 
@@ -371,7 +375,9 @@ vk::DeviceMemory *ggml_vk_allocate(size_t size, vk::MemoryPropertyFlags flags, v
     vk::DeviceMemory *vkDeviceMemory =  new vk::DeviceMemory;
     vk::Result r = komputeManager()->device()->allocateMemory(&allocInfo, nullptr, vkDeviceMemory);
     if (r != vk::Result::eSuccess) {
+        #ifndef LLAMA_QUIET
         std::cerr << "Error allocating memory " << vk::to_string(r) << std::endl;
+        #endif
         throw std::runtime_error("Error allocating vulkan memory.");
     }
     return vkDeviceMemory;
@@ -417,8 +423,10 @@ ggml_vk_memory ggml_vk_allocate(size_t size) {
         komputeManager()->device()->bindBufferMemory(*memory.primaryBuffer, *memory.primaryMemory, 0);
         if (isHostVisible) {
             vk::Result r = komputeManager()->device()->mapMemory(*memory.primaryMemory, 0, size, vk::MemoryMapFlags(), &memory.data);
+            #ifndef LLAMA_QUIET
             if (r != vk::Result::eSuccess)
                 std::cerr << "Error mapping memory" << vk::to_string(r);
+            #endif
         }
     }
 
@@ -431,8 +439,10 @@ ggml_vk_memory ggml_vk_allocate(size_t size) {
         memory.stagingMemory = ggml_vk_allocate(size, memoryPropertyFlags, memoryRequirements, &isHostVisible);
         komputeManager()->device()->bindBufferMemory(*memory.stagingBuffer, *memory.stagingMemory, 0);
         vk::Result r = komputeManager()->device()->mapMemory(*memory.stagingMemory, 0, size, vk::MemoryMapFlags(), &memory.data);
+        #ifndef LLAMA_QUIET
         if (r != vk::Result::eSuccess)
             std::cerr << "Error mapping memory" << vk::to_string(r);
+        #endif
     }
 
     memory.size = size;
@@ -463,7 +473,9 @@ static
 decltype(ggml_kompute_context::buffers)::iterator ggml_vk_find_tensor(struct ggml_kompute_context * ctx, struct ggml_tensor * t, uint64_t & offset) {
     for (auto it = ctx->buffers.begin(); ; it++) {
         if (it == ctx->buffers.end()) {
+            #ifndef LLAMA_QUIET
             fprintf(stderr, "%s: Failed to find tensor %p\n", __func__, t->data);
+            #endif
             return it;
         }
         if (it->data <= t->data &&
