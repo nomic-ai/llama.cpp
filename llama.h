@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string>
 
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
@@ -225,6 +226,10 @@ extern "C" {
 
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
+
+    LLAMA_API struct llama_context * llama_init_from_file(
+                             const char * path_model,
+            struct llama_context_params   params);
 
     LLAMA_API struct llama_model * llama_load_model_from_file(
                              const char * path_model,
@@ -533,6 +538,8 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+LLAMA_API std::string llama_token_to_str(const struct llama_context * ctx, llama_token token);
 
 // Internal API to be implemented by llama.cpp and used by tests/benchmarks only
 #ifdef LLAMA_API_INTERNAL
