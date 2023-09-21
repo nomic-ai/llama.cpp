@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string>
 
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
@@ -829,6 +830,8 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+LLAMA_API std::string llama_token_to_piece(const struct llama_context * ctx, llama_token token);
 
 // Internal API to be implemented by llama.cpp and used by tests/benchmarks only
 #ifdef LLAMA_API_INTERNAL
