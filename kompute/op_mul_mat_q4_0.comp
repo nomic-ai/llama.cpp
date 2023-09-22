@@ -10,71 +10,7 @@
 
 #include "common.comp"
 
-layout(local_size_x = 8, local_size_y = 8) in;
+#define LOCAL_SIZE_X_VALUE 8
+#define LOCAL_SIZE_Y_VALUE 8
 
-layout (binding = 0) readonly buffer tensorInA { uint8_t inA[]; };
-layout (binding = 1) readonly buffer tensorInB { float inB[]; };
-layout (binding = 2) writeonly buffer tensorOut { float out_[]; };
-
-layout (push_constant) uniform parameter {
-    uint inAOff;
-    uint inBOff;
-    uint outOff;
-    int ne00;
-    int ne10;
-    int ne0;
-} pcs;
-
-shared float sum[64];
-
-void main() {
-    const uint nb = uint(pcs.ne00/QK4_0);
-
-    const uint r0 = gl_WorkGroupID.x;
-    const uint r1 = gl_WorkGroupID.y;
-
-    const uint x = r0*nb; // Based from inA without base offset
-    const uint y = r1*uint(pcs.ne10) + pcs.inBOff; // Based from inB
-
-    const uint nth = gl_WorkGroupSize.x*gl_WorkGroupSize.y;
-    const uint ith = gl_WorkGroupSize.y*gl_LocalInvocationID.x + gl_LocalInvocationID.y;
-
-    const uint ix = gl_LocalInvocationID.y/4;           // 0 or 1
-    const uint iy = gl_LocalInvocationID.y - 4*ix;      // 0...3
-
-    const uint first = 4 * iy;
-
-    float sumf = 0.0;
-
-    for (uint i = 2*gl_LocalInvocationID.x + ix; i < nb; i += 2*gl_WorkGroupSize.x) {
-        const uint index = (x+i)*sizeof_block_q4_0+pcs.inAOff;
-        const float d = float(u8BufToFloat16(inA, index));
-
-        const uint xl = first; // Based from bl->qs
-        const uint yl = y + i * QK4_0 + first; // Based from inB
-
-        vec2 acc = vec2(0.0, 0.0);
-
-        for (int j = 0; j < 4; ++j) {
-            const uint8_t b = inA[index+2+xl+j];
-            acc.x += inB[yl+j] * (b & 0xF) + inB[yl+j+16] * (b >> 4);
-            acc.y += inB[yl+j] + inB[yl+j+16];
-        }
-
-        sumf += d * (acc.x - 8.*acc.y);
-    }
-
-    sum[ith] = sumf;
-
-    //
-    // Accumulate the sum from all threads in the threadgroup
-    //
-    barrier();
-    if (ith == 0) {
-        float sumTotal = 0.0;
-        for (uint i = 0; i < nth; ++i) {
-            sumTotal += sum[i];
-        }
-        out_[r1*uint(pcs.ne0) + r0 + pcs.outOff] = sumTotal;
-    }
-}
+#include "op_mul_mv_q_n.comp"
