@@ -439,6 +439,11 @@ Manager::createDevice(const std::vector<uint32_t>& familyQueueIndices,
     features12.shaderInt8 = true;
     features12.pNext = &features11;
 
+//    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT floatFeatures;
+//    floatFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+//    floatFeatures.shaderBufferFloat32AtomicAdd = true; // this allows to perform atomic operations on storage buffers
+//    floatFeatures.pNext = &features12;
+
     vk::DeviceCreateInfo deviceCreateInfo(vk::DeviceCreateFlags(),
                                           deviceQueueCreateInfos.size(),
                                           deviceQueueCreateInfos.data(),

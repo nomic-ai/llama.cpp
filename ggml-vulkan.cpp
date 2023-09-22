@@ -113,6 +113,12 @@ static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physicalDevic
         return false;
     }
 
+    // FIXME: Find out how to get access and check
+//    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT floatFeatures;
+//    floatFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+//    floatFeatures.shaderBufferFloat32AtomicAdd = true; // this allows to perform atomic operations on storage buffers
+//    floatFeatures.pNext = &features12;
+
     return true;
 }
 
@@ -242,7 +248,7 @@ bool ggml_vk_init_device(const ggml_vk_device &device) {
 bool ggml_vk_init_device(int device) {
     komputeManager()->initializeDevice(device, {},
                          {"VK_KHR_shader_float16_int8", "VK_KHR_8bit_storage",
-                          "VK_KHR_16bit_storage", "VK_KHR_storage_buffer_storage_class"});
+                          "VK_KHR_16bit_storage", "VK_EXT_shader_atomic_float"});
     return ggml_vk_has_device();
 }
 
@@ -927,6 +933,7 @@ void ggml_vk_mul_mat_q4_x(const std::vector<uint32_t>& spirv, uint32_t block_siz
         s_algo->setPushConstants<PushConstants>({pushConsts});
         s_algo->updateDescriptors(s_kompute_context->pool.get());
     }
+    seq.record<kp::OpTensorFill>({out});
     seq.record<kp::OpAlgoDispatch>(s_algo);
 }
 
