@@ -87,8 +87,10 @@ static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physicalDevic
     vk::PhysicalDeviceFeatures availableFeatures;
     physicalDevice.getFeatures(&availableFeatures);
 
-    if (!availableFeatures.shaderInt16)
+    if (!availableFeatures.shaderInt16) {
+        fprintf(stderr, "%s: no shader int16 support\n", __func__);
         return false;
+    }
 
     vk::PhysicalDeviceVulkan11Features availableFeatures11;
     vk::PhysicalDeviceVulkan12Features availableFeatures12;
@@ -103,13 +105,23 @@ static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physicalDevic
 
     if (!availableFeatures11.uniformAndStorageBuffer16BitAccess ||
         !availableFeatures11.storageBuffer16BitAccess) {
+        fprintf(stderr, "%s: no 16-bit storage access support (Vulkan 1.1)\n", __func__);
         return false;
     }
 
     if (!availableFeatures12.storageBuffer8BitAccess ||
-        !availableFeatures12.uniformAndStorageBuffer8BitAccess ||
-        !availableFeatures12.shaderFloat16 ||
-        !availableFeatures12.shaderInt8) {
+        !availableFeatures12.uniformAndStorageBuffer8BitAccess) {
+        fprintf(stderr, "%s: no 8-bit storage access support (Vulkan 1.2)\n", __func__);
+        return false;
+    }
+
+    if (!availableFeatures12.shaderFloat16) {
+        fprintf(stderr, "%s: no shader float16 support (Vulkan 1.2)\n", __func__);
+        return false;
+    }
+
+    if (!availableFeatures12.shaderInt8) {
+        fprintf(stderr, "%s: no shader int8 support (Vulkan 1.2)\n", __func__);
         return false;
     }
 
@@ -131,14 +143,22 @@ static std::string ggml_vk_getVendorName(uint32_t vendorID) {
 
 std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
     std::vector<ggml_vk_device> results;
-    if (!komputeManager()->hasVulkan() || !komputeManager()->hasInstance())
+    if (!komputeManager()->hasVulkan()) {
+        fprintf(stderr, "%s: hasVulkan() returned false\n", __func__);
         return results;
+    }
+    if (!komputeManager()->hasInstance()) {
+        fprintf(stderr, "%s: hasInstance() returned false\n", __func__);
+        return results;
+    }
 
     std::vector<vk::PhysicalDevice> physicalDevices = komputeManager()->listDevices();
     uint32_t deviceCount = physicalDevices.size();
 
-    if (deviceCount == 0)
+    if (deviceCount == 0) {
+        fprintf(stderr, "%s: Kompute listDevices() found no devices\n", __func__);
         return results;
+    }
 
     std::unordered_map<std::string, size_t> count_by_name;
 
@@ -147,11 +167,15 @@ std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
         VkPhysicalDeviceMemoryProperties memoryProperties = physicalDevices.at(i).getMemoryProperties();
         const uint32_t major = VK_VERSION_MAJOR(properties.apiVersion);
         const uint32_t minor = VK_VERSION_MINOR(properties.apiVersion);
-        if (major < 1 || minor < 2)
+        if (major < 1 || minor < 2) {
+            fprintf(stderr, "%s: skipping device %d: Vulkan 1.2 not supported\n", __func__, i);
             continue;
+        }
 
-        if (!ggml_vk_checkPhysicalDeviceFeatures(physicalDevices.at(i)))
+        if (!ggml_vk_checkPhysicalDeviceFeatures(physicalDevices.at(i))) {
+            fprintf(stderr, "%s: skipping device %d: physical device features insufficient\n", __func__, i);
             continue;
+        }
 
         size_t heapSize = 0;
         for (uint32_t j = 0; j < memoryProperties.memoryHeapCount; ++j) {
@@ -162,8 +186,10 @@ std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
             }
         }
 
-        if (heapSize < memoryRequired)
+        if (heapSize < memoryRequired) {
+            fprintf(stderr, "%s: skipping device %d: need at least heapSize=%zu, have %zu\n", __func__, i, memoryRequired, heapSize);
             continue;
+        }
 
         ggml_vk_device d;
         d.index = i;
