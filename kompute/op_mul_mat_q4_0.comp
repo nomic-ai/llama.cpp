@@ -12,5 +12,123 @@
 
 #define LOCAL_SIZE_X_VALUE 8
 #define LOCAL_SIZE_Y_VALUE 8
+#define LOCAL_SIZE_Z_VALUE 1
+#define QUANT_SIZE QK4_0
+#define SIZE_OF_BLOCK sizeof_block_q4_0
+#define N_ROWS 4
 
-#include "op_mul_mv_q_n.comp"
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = LOCAL_SIZE_X_VALUE,
+       local_size_y = LOCAL_SIZE_Y_VALUE,
+       local_size_y = LOCAL_SIZE_Z_VALUE) in;
+
+layout (binding = 0) readonly buffer tensorInA { uint8_t inA[]; };
+layout (binding = 1) readonly buffer tensorInB { float inB[]; };
+layout (binding = 2) writeonly buffer tensorOut { float out_[]; };
+
+layout (push_constant) uniform parameter {
+    uint inAOff;
+    uint inBOff;
+    uint outOff;
+    int ne00;
+    int ne10;
+    int ne0;
+    int ne1;
+    int ne01;
+    int gqa;
+} pcs;
+
+void main() {
+    const uint nb = uint(pcs.ne00/QUANT_SIZE);
+    //const int nb = ne00/QK4_0;
+
+    const uint r0 = gl_WorkGroupID.x;
+    //const int r0 = tgpig.x;
+
+    const uint r1 = gl_WorkGroupID.y;
+    //const int r1 = tgpig.y;
+
+    const uint im = gl_WorkGroupID.z;
+    //const int im = tgpig.z;
+
+    const uint first_row = (r0 * gl_NumSubgroups + gl_SubgroupID) * N_ROWS;
+    //const int first_row = (r0 * nsg + sgitg) * nr;
+
+    const uint offset0 = first_row * nb + im/pcs.gqa*(nb*pcs.ne0);
+    //const uint offset0 = first_row * nb + im/gqa*(nb*ne0);
+
+    const uint x = offset0 + pcs.inAOff;           // Based from inA
+    //device const block_q_type * x = (device const block_q_type *) src0 + offset0;
+
+    const uint y = r1*uint(pcs.ne10) + im*pcs.ne00*pcs.ne1 + pcs.inBOff; // Based from inB
+    //device const float        * y = (device const float        *) src1 + r1*ne10 + im*ne00*ne1;
+
+    float yl[16];                                  // src1 vector cache
+    float sumf[N_ROWS] = {0.0f, 0.0f, 0.0f, 0.0f};
+    //float sumf[nr]={0.f};
+
+    const uint ix = gl_SubgroupInvocationID/2;
+    //const int ix = tiisg/2;
+    const uint il = 8*(gl_SubgroupInvocationID%2);
+    //const int il = 8*(tiisg%2);
+
+    uint yb = y + ix * QUANT_SIZE + il;
+    //device const float * yb = y + ix * QK4_0 + il;
+
+    for (uint ib = ix; ib < nb; ib += gl_SubgroupSize/2) { // FIXME: we need to figure out if group size is not 32??
+    //for (int ib = ix; ib < nb; ib += nw/2) {
+        float sumy = 0;
+        for (int i = 0; i < 8; i += 2) {
+            sumy += inB[yb+i] + inB[yb+i+1];
+            yl[i+0] = inB[yb+i+0];
+            yl[i+1] = inB[yb+i+1]/256.f;
+            sumy += inB[yb+i+16] + inB[yb+i+17];
+            yl[i+8] = inB[yb+i+16]/16.f;
+            yl[i+9] = inB[yb+i+17]/4096.f;
+
+            //sumy += yb[i] + yb[i+1];
+            //yl[i+0] = yb[i+ 0];
+            //yl[i+1] = yb[i+ 1]/256.f;
+            //sumy += yb[i+16] + yb[i+17];
+            //yl[i+8] = yb[i+16]/16.f;
+            //yl[i+9] = yb[i+17]/4096.f;
+
+        }
+
+        for (int row = 0; row < N_ROWS; row++) {
+            vec2 acc = vec2(0.0, 0.0);
+            const uint index = x+ib+row*nb;
+            float d = float(u8BufToFloat16(inA, index));
+
+            for (int i = 0; i < 8; i+=2) {
+                const uint16_t b = u8BufToU16(inA, index + 2 + il + i);
+                //device const uint16_t * qs = ((device const uint16_t *)qb_curr + 1 + il/2);
+                acc[0] += yl[i + 0] * (b & 0x000F)
+                          + yl[i + 1] * (b & 0x0F00);
+                acc[1] += yl[i + 8] * (b & 0x00F0)
+                          + yl[i + 9] * (b & 0xF000);
+                //acc[0] += yl[i + 0] * (qs[i / 2] & 0x000F)
+                //          + yl[i + 1] * (qs[i / 2] & 0x0F00);
+                //acc[1] += yl[i + 8] * (qs[i / 2] & 0x00F0)
+                //          + yl[i + 9] * (qs[i / 2] & 0xF000);
+            }
+            sumf[row] += d * (sumy * -8.f + acc[0] + acc[1]);
+        }
+
+        yb += QUANT_SIZE * 16;
+    }
+
+    for (int row = 0; row < N_ROWS; ++row) {
+        const float tot = subgroupAdd(sumf[row]);
+        if (subgroupElect() && first_row + row < pcs.ne01) {
+            out_[r1*pcs.ne0 + im*pcs.ne0*pcs.ne1 + first_row + row + pcs.outOff] = tot;
+        }
+    }
+    //for (int row = 0; row < nr; ++row) {
+    //    const float tot = simd_sum(sumf[row]);
+    //    if (tiisg == 0 && first_row + row < ne01) {
+    //        dst[r1*ne0 + im*ne0*ne1 + first_row + row] = tot;
+    //    }
+    //}
+}

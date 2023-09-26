@@ -913,14 +913,14 @@ void ggml_vk_mul_mat_q4_x(const std::vector<uint32_t>& spirv, uint32_t block_siz
                           const std::shared_ptr<kp::Tensor>& inB,
                           const std::shared_ptr<kp::Tensor>& out,
                           uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
-                          int32_t ne00, int32_t ne10, int32_t ne0,
-                          int32_t ne01, int32_t ne11) {
+                          int32_t ne00, int32_t ne10, int32_t ne0, int32_t ne1,
+                          int32_t ne01, int32_t ne11, int32_t ne12, int32_t ne02) {
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t ne00, ne10, ne0;
+        int32_t ne00, ne10, ne0, ne1, ne01, gqa;
     } pushConsts {
         safe_divide(inAOff, block_size), safe_divide(inBOff, 4), safe_divide(outOff, 4),
-        ne00, ne10, ne0,
+        ne00, ne10, ne0, ne1, ne01, ne12/ne02
     };
 
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
@@ -1275,10 +1275,10 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                             ggml_vk_mul_mat_f16(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
                         } else if (src0->type == GGML_TYPE_Q4_0
                                    && src1->type == GGML_TYPE_F32) {
-                            ggml_vk_mul_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne01, ne11);
+                            ggml_vk_mul_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
                         } else if (src0->type == GGML_TYPE_Q4_1
                                    && src1->type == GGML_TYPE_F32) {
-                            ggml_vk_mul_mat_q4_1(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne01, ne11);
+                            ggml_vk_mul_mat_q4_1(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
                         } else {
                             fprintf(stderr, "%s: %s: Unsupported quantization: %u/%u\n", __func__, ggml_op_name(dst->op), src0->type, src1->type);
                             goto not_implemented;
