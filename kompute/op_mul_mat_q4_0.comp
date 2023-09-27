@@ -13,7 +13,7 @@
 #define LOCAL_SIZE_X_VALUE 8
 #define LOCAL_SIZE_Y_VALUE 8
 #define LOCAL_SIZE_Z_VALUE 1
-#define QUANT_SIZE QK4_0
+#define BLOCKS_IN_QUANT QK4_0
 #define SIZE_OF_BLOCK sizeof_block_q4_0
 #define N_ROWS 4
 
@@ -41,7 +41,7 @@ layout (push_constant) uniform parameter {
 } pcs;
 
 void main() {
-    const uint nb = uint(pcs.ne00/QUANT_SIZE);
+    const uint nb = uint(pcs.ne00/BLOCKS_IN_QUANT);
     const uint r0 = gl_WorkGroupID.x;
     const uint r1 = gl_WorkGroupID.y;
     const uint im = gl_WorkGroupID.z;
@@ -56,7 +56,7 @@ void main() {
     const uint ix = gl_SubgroupInvocationID/2;
     const uint il = 8*(gl_SubgroupInvocationID%2);
 
-    uint yb = y + ix * QUANT_SIZE + il;
+    uint yb = y + ix * BLOCKS_IN_QUANT + il;
 
 //    debugPrintfEXT("gl_NumSubgroups=%d, gl_SubgroupID=%d, gl_SubgroupInvocationID=%d, glSubgroupSize=%d, gl_WorkGroupID.x=%d, gl_WorkGroupID.y=%d\n",
 //        gl_NumSubgroups, gl_SubgroupID, gl_SubgroupInvocationID, gl_SubgroupSize,
@@ -84,7 +84,7 @@ void main() {
             sumf[row] += d * (sumy * -8.f + acc[0] + acc[1]);
         }
 
-        yb += QUANT_SIZE * 16;
+        yb += BLOCKS_IN_QUANT * 16;
     }
 
     for (int row = 0; row < N_ROWS; ++row) {
