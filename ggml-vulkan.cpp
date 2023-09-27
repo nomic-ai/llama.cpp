@@ -83,12 +83,12 @@ static void enable_sam() {
 }
 #endif
 
-static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physicalDevice) {
+static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physicalDevice, std::string & reason) {
     vk::PhysicalDeviceFeatures availableFeatures;
     physicalDevice.getFeatures(&availableFeatures);
 
     if (!availableFeatures.shaderInt16) {
-        fprintf(stderr, "%s: no shader int16 support\n", __func__);
+        reason = "no shader int16 support";
         return false;
     }
 
@@ -105,23 +105,23 @@ static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physicalDevic
 
     if (!availableFeatures11.uniformAndStorageBuffer16BitAccess ||
         !availableFeatures11.storageBuffer16BitAccess) {
-        fprintf(stderr, "%s: no 16-bit storage access support (Vulkan 1.1)\n", __func__);
+        reason = "no 16-bit storage access support (Vulkan 1.1)";
         return false;
     }
 
     if (!availableFeatures12.storageBuffer8BitAccess ||
         !availableFeatures12.uniformAndStorageBuffer8BitAccess) {
-        fprintf(stderr, "%s: no 8-bit storage access support (Vulkan 1.2)\n", __func__);
+        reason = "no 8-bit storage access support (Vulkan 1.2)";
         return false;
     }
 
     if (!availableFeatures12.shaderFloat16) {
-        fprintf(stderr, "%s: no shader float16 support (Vulkan 1.2)\n", __func__);
+        reason = "no shader float16 support (Vulkan 1.2)";
         return false;
     }
 
     if (!availableFeatures12.shaderInt8) {
-        fprintf(stderr, "%s: no shader int8 support (Vulkan 1.2)\n", __func__);
+        reason = "no shader int8 support (Vulkan 1.2)";
         return false;
     }
 
@@ -141,7 +141,7 @@ static std::string ggml_vk_getVendorName(uint32_t vendorID) {
     }
 }
 
-std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
+std::vector<ggml_vk_device> ggml_vk_all_devices(size_t memoryRequired) {
     std::vector<ggml_vk_device> results;
     if (!komputeManager()->hasVulkan()) {
         fprintf(stderr, "%s: hasVulkan() returned false\n", __func__);
@@ -163,18 +163,18 @@ std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
     std::unordered_map<std::string, size_t> count_by_name;
 
     for (uint32_t i = 0; i < deviceCount; i++) {
+        ggml_vk_device d;
         VkPhysicalDeviceProperties properties = physicalDevices.at(i).getProperties();
         VkPhysicalDeviceMemoryProperties memoryProperties = physicalDevices.at(i).getMemoryProperties();
         const uint32_t major = VK_VERSION_MAJOR(properties.apiVersion);
         const uint32_t minor = VK_VERSION_MINOR(properties.apiVersion);
         if (major < 1 || minor < 2) {
-            fprintf(stderr, "%s: skipping device %d: Vulkan 1.2 not supported\n", __func__, i);
-            continue;
+            d.available = false;
+            d.unavail_reason = "Vulkan 1.2 not supported";
         }
 
-        if (!ggml_vk_checkPhysicalDeviceFeatures(physicalDevices.at(i))) {
-            fprintf(stderr, "%s: skipping device %d: physical device features insufficient\n", __func__, i);
-            continue;
+        if (d.available) {
+            d.available = ggml_vk_checkPhysicalDeviceFeatures(physicalDevices.at(i), d.unavail_reason);
         }
 
         size_t heapSize = 0;
@@ -186,12 +186,12 @@ std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
             }
         }
 
-        if (heapSize < memoryRequired) {
-            fprintf(stderr, "%s: skipping device %d: need at least heapSize=%zu, have %zu\n", __func__, i, memoryRequired, heapSize);
-            continue;
+        if (d.available && heapSize < memoryRequired) {
+            d.available = false;
+            d.unavail_reason = "need at least heapSize=" + std::to_string(memoryRequired) + ", have "
+                             + std::to_string(heapSize);
         }
 
-        ggml_vk_device d;
         d.index = i;
         d.type = properties.deviceType;
         d.heapSize = heapSize;
@@ -217,6 +217,12 @@ std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
         }
     );
 
+    return results;
+}
+
+std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired) {
+    auto results = ggml_vk_all_devices(memoryRequired);
+    std::remove_if(results.begin(), results.end(), [](ggml_vk_device &d) { return !d.available; });
     return results;
 }
 

@@ -32,10 +32,13 @@ struct ggml_vk_device {
     int index = 0;
     int type = 0;           // same as VkPhysicalDeviceType
     size_t heapSize = 0;
+    bool available = true;
     std::string name;
     std::string vendor;
+    std::string unavail_reason;
 };
 
+std::vector<ggml_vk_device> ggml_vk_all_devices(size_t memoryRequired);
 std::vector<ggml_vk_device> ggml_vk_available_devices(size_t memoryRequired);
 bool ggml_vk_init_device(size_t memoryRequired, const std::string &device);
 bool ggml_vk_init_device(const ggml_vk_device &device);
