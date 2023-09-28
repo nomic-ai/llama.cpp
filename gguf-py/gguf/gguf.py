@@ -213,6 +213,18 @@ MODEL_TENSOR_NAMES: dict[MODEL_ARCH, dict[MODEL_TENSOR, str]] = {
         MODEL_TENSOR.FFN_DOWN:      "blk.{bid}.ffn_down",
         MODEL_TENSOR.FFN_UP:        "blk.{bid}.ffn_up",
     },
+    MODEL_ARCH.GPTJ: {
+        MODEL_TENSOR.TOKEN_EMBD:    "token_embd",
+        MODEL_TENSOR.OUTPUT_NORM:   "output_norm",
+        MODEL_TENSOR.OUTPUT:        "output",
+        MODEL_TENSOR.ATTN_NORM:     "blk.{bid}.attn_norm",
+        MODEL_TENSOR.ATTN_Q:        "blk.{bid}.attn_q",
+        MODEL_TENSOR.ATTN_K:        "blk.{bid}.attn_k",
+        MODEL_TENSOR.ATTN_V:        "blk.{bid}.attn_v",
+        MODEL_TENSOR.ATTN_OUT:      "blk.{bid}.attn_output",
+        MODEL_TENSOR.FFN_DOWN:      "blk.{bid}.ffn_down",
+        MODEL_TENSOR.FFN_UP:        "blk.{bid}.ffn_up",
+    },
     MODEL_ARCH.GPT2: {
         # TODO
     },
@@ -237,7 +249,7 @@ class TensorNameMap:
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
             "gpt_neox.embed_in",           # gptneox
-            "transformer.wte",             # gpt2 mpt
+            "transformer.wte",             # gpt2 gpt-j mpt
             "transformer.word_embeddings", # falcon
             "model.embed_tokens",          # llama-hf
             "tok_embeddings",              # llama-pth
@@ -258,14 +270,14 @@ class TensorNameMap:
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out", # gptneox
-            "lm_head",   # gpt2 mpt falcon llama-hf baichuan
+            "lm_head",   # gpt2 gpt-j mpt falcon llama-hf baichuan
             "output",    # llama-pth
         ),
 
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm", # gptneox
-            "transformer.ln_f",          # gpt2 falcon
+            "transformer.ln_f",          # gpt2 gpt-j falcon
             "model.norm",                # llama-hf baichuan
             "norm",                      # llama-pth
             "embeddings.LayerNorm",      # bert
@@ -282,7 +294,7 @@ class TensorNameMap:
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "gpt_neox.layers.{bid}.input_layernorm",           # gptneox
-            "transformer.h.{bid}.ln_1",                        # gpt2
+            "transformer.h.{bid}.ln_1",                        # gpt2 gpt-j
             "transformer.blocks.{bid}.norm_1",                 # mpt
             "transformer.h.{bid}.input_layernorm",             # falcon7b
             "transformer.h.{bid}.ln_mlp",                      # falcon40b
@@ -309,6 +321,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.q_proj",       # llama-hf
             "layers.{bid}.attention.wq",                 # llama-pth
             "encoder.layer.{bid}.attention.self.query",  # bert
+            "transformer.h.{bid}.attn.q_proj",           # gpt-j
         ),
 
         # Attention key
@@ -316,6 +329,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.k_proj",     # llama-hf
             "layers.{bid}.attention.wk",               # llama-pth
             "encoder.layer.{bid}.attention.self.key",  # bert
+            "transformer.h.{bid}.attn.k_proj",         # gpt-j
         ),
 
         # Attention value
@@ -323,6 +337,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.v_proj",       # llama-hf
             "layers.{bid}.attention.wv",                 # llama-pth
             "encoder.layer.{bid}.attention.self.value",  # bert
+            "transformer.h.{bid}.attn.v_proj",           # gpt-j
         ),
 
         # Attention output
@@ -334,6 +349,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.o_proj",         # llama-hf
             "layers.{bid}.attention.wo",                   # llama-pth
             "encoder.layer.{bid}.attention.output.dense",  # bert
+            "transformer.h.{bid}.attn.out_proj",           # gpt-j
         ),
 
         # Rotary embeddings
@@ -361,6 +377,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.up_proj",                 # llama-hf
             "layers.{bid}.feed_forward.w3",                   # llama-pth
             "encoder.layer.{bid}.intermediate.dense",         # bert
+            "transformer.h.{bid}.mlp.fc_in",                  # gpt-j
         ),
 
         # Feed-forward gate
@@ -378,6 +395,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.down_proj",         # llama-hf
             "layers.{bid}.feed_forward.w2",             # llama-pth
             "encoder.layer.{bid}.output.dense",         # bert
+            "transformer.h.{bid}.mlp.fc_out",           # gpt-j
         ),
     }
 
