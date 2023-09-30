@@ -1350,7 +1350,7 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                 case GGML_OP_MUL_MAT:
                     {
                         if (src1t != GGML_TYPE_F32) {
-                            fprintf(stderr, "%s: %s: Unsupported quantization: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
+                            fprintf(stderr, "%s: %s: Unsupported src1 type: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
                             goto not_implemented;
                         }
 
@@ -1368,7 +1368,7 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                                     ggml_vk_mul_mat_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
                                     break;
                                 default: {
-                                    fprintf(stderr, "%s: %s: Unsupported quantization: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
+                                    fprintf(stderr, "%s: %s: Unsupported quantization for M*M: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
                                     goto not_implemented;
                                 }
                             }
