@@ -23,10 +23,11 @@
 #include "shaderop_rmsnorm.h"
 #include "shaderop_diagmask.h"
 #include "shaderop_mul_mat_f16.h"
-#include "shaderop_mul_mat_mat_f16.h"
 #include "shaderop_mul_mat_q4_0.h"
-#include "shaderop_mul_mat_mat_q4_0.h"
 #include "shaderop_mul_mat_q4_1.h"
+#include "shaderop_mul_mat_mat_f32.h"
+#include "shaderop_mul_mat_mat_f16.h"
+#include "shaderop_mul_mat_mat_q4_0.h"
 #include "shaderop_getrows_f16.h"
 #include "shaderop_getrows_q4_0.h"
 #include "shaderop_getrows_q4_1.h"
@@ -912,7 +913,8 @@ void ggml_vk_mul_mat_f16(kp::Sequence& seq,
     seq.record<kp::OpAlgoDispatch>(s_algo);
 }
 
-void ggml_vk_mul_mat_mat_f16(kp::Sequence& seq,
+
+void ggml_vk_mul_mat_mat_f32(kp::Sequence& seq,
                          const std::shared_ptr<kp::Tensor>& inA,
                          const std::shared_ptr<kp::Tensor>& inB,
                          const std::shared_ptr<kp::Tensor>& out,
@@ -921,31 +923,93 @@ void ggml_vk_mul_mat_mat_f16(kp::Sequence& seq,
                          uint32_t nb01, uint32_t nb02,
                          int32_t ne11, int32_t ne12,
                          uint32_t nb11, uint32_t nb12,
-                         int32_t ne0, int32_t ne1) {
+                         uint32_t nb1, uint32_t nb2) {
+    const static auto spirv = getSpirvShader(kp::shader_data::op_mul_mat_mat_f32_comp_spv,
+        kp::shader_data::op_mul_mat_mat_f32_comp_spv_len);
+
+    struct PushConstants {
+        uint32_t inAOff, inBOff, outOff;
+        int32_t ne00, ne01, ne11;
+        uint32_t nb01, nb02;
+        uint32_t nb11, nb12;
+        uint32_t n0, nb1, nb2;
+    } pushConsts {
+        safe_divide(inAOff, 4), safe_divide(inBOff, 4), safe_divide(outOff, 4),
+        ne00, ne01, ne11, 
+        nb01, nb11, nb12,
+        nb1, nb2
+    };
+
+    std::shared_ptr<kp::Algorithm> s_algo = nullptr;
+    if (!komputeManager()->hasAlgorithm(__func__)) {
+        //std::cerr << "init f32 matmat shader" << std::endl;
+        s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(),
+        {inA, inB, out}, spirv, 
+        {unsigned(ne01),
+         unsigned(ne11),
+         unsigned(ne12)}, 
+        {}, 
+        {pushConsts});
+    } else {
+        s_algo = komputeManager()->getAlgorithm(__func__);
+        s_algo->setTensors({inA, inB, out});
+        s_algo->setWorkgroup({unsigned(ne01),
+                              unsigned(ne11),
+                              unsigned(ne12)});
+        s_algo->setPushConstants<PushConstants>({pushConsts});
+        s_algo->updateDescriptors(s_kompute_context->pool.get());
+    }
+    //seq.record<kp::OpTensorFill>({out});
+    seq.record<kp::OpAlgoDispatch>(s_algo);
+}
+
+void ggml_vk_mul_mat_mat_f16(kp::Sequence& seq,
+                          const std::shared_ptr<kp::Tensor>& inA,
+                          const std::shared_ptr<kp::Tensor>& inB,
+                          const std::shared_ptr<kp::Tensor>& out,
+                          uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
+                         int32_t ne00, int32_t ne01,
+                         uint32_t nb01, uint32_t nb02,
+                         int32_t ne11, int32_t ne12,
+                         uint32_t nb11, uint32_t nb12,
+                         uint32_t nb1, uint32_t nb2) {
     const static auto spirv = getSpirvShader(kp::shader_data::op_mul_mat_mat_f16_comp_spv,
         kp::shader_data::op_mul_mat_mat_f16_comp_spv_len);
 
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t ne00;
+        int32_t ne00, ne01, ne11;
         uint32_t nb01, nb02;
         uint32_t nb11, nb12;
-        int32_t ne0, ne1;
+        uint32_t n0, nb1, nb2;
     } pushConsts {
-        safe_divide(inAOff, 2), safe_divide(inBOff, 4), safe_divide(outOff, 4),
-        ne00, nb01, nb02, nb11, nb12, ne0, ne1,
+        safe_divide(inAOff, 4), safe_divide(inBOff, 4), safe_divide(outOff, 4),
+        ne00, ne01, ne11, 
+        nb01, nb11, nb12,
+        nb1, nb2
     };
 
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
-    if (!komputeManager()->hasAlgorithm(__func__))
-        s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(), {inA, inB, out}, spirv, {unsigned(ne01), unsigned(ne11), unsigned(ne12)}, {}, {pushConsts});
-    else {
+    if (!komputeManager()->hasAlgorithm(__func__)) {
+        s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(),
+        {inA, inB, out}, spirv, 
+        {unsigned(ne01),
+         unsigned(ne11),
+         unsigned(ne12)
+         }, 
+        {}, 
+        {pushConsts});
+    } else {
         s_algo = komputeManager()->getAlgorithm(__func__);
         s_algo->setTensors({inA, inB, out});
-        s_algo->setWorkgroup({unsigned(ne01), unsigned(ne11), unsigned(ne12)});
+        s_algo->setWorkgroup({unsigned(ne01),
+                              unsigned(ne11),
+                              unsigned(ne12),
+                              });
         s_algo->setPushConstants<PushConstants>({pushConsts});
         s_algo->updateDescriptors(s_kompute_context->pool.get());
     }
+    seq.record<kp::OpTensorFill>({out});
     seq.record<kp::OpAlgoDispatch>(s_algo);
 }
 
@@ -956,26 +1020,27 @@ void ggml_vk_mul_mat_mat_q4_x(const std::vector<uint32_t>& spirv, uint32_t block
                           uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
                           int32_t ne00, int32_t ne10, int32_t ne0, int32_t ne1,
                           int32_t ne01, int32_t ne11, int32_t ne12, int32_t ne02) {
-    struct PushConstants {
-        uint32_t inAOff, inBOff, outOff;
-        int32_t ne00, ne10, ne0, ne1, ne01, gqa;
-    } pushConsts {
-        safe_divide(inAOff, block_size), safe_divide(inBOff, 4), safe_divide(outOff, 4),
-        ne00, ne10, ne0, ne1, ne01, ne12/ne02
-    };
+    abort();
+    // struct PushConstants {
+    //     uint32_t inAOff, inBOff, outOff;
+    //     int32_t ne00, ne10, ne0, ne1, ne01, gqa;
+    // } pushConsts {
+    //     safe_divide(inAOff, block_size), safe_divide(inBOff, 4), safe_divide(outOff, 4),
+    //     ne00, ne10, ne0, ne1, ne01, ne12/ne02
+    // };
 
-    std::shared_ptr<kp::Algorithm> s_algo = nullptr;
-    if (!komputeManager()->hasAlgorithm(__func__))
-        s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(), {inA, inB, out}, spirv, {unsigned((ne01 + 7)/8), unsigned(ne11), unsigned(ne12)}, {}, {pushConsts});
-    else {
-        s_algo = komputeManager()->getAlgorithm(__func__);
-        s_algo->setTensors({inA, inB, out});
-        s_algo->setWorkgroup({unsigned((ne01 + 7)/8), unsigned(ne11), unsigned(ne12)});
-        s_algo->setPushConstants<PushConstants>({pushConsts});
-        s_algo->updateDescriptors(s_kompute_context->pool.get());
-    }
+    // std::shared_ptr<kp::Algorithm> s_algo = nullptr;
+    // if (!komputeManager()->hasAlgorithm(__func__))
+    //     s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(), {inA, inB, out}, spirv, {unsigned((ne01 + 7)/8), unsigned(ne11), unsigned(ne12)}, {}, {pushConsts});
+    // else {
+    //     s_algo = komputeManager()->getAlgorithm(__func__);
+    //     s_algo->setTensors({inA, inB, out});
+    //     s_algo->setWorkgroup({unsigned((ne01 + 7)/8), unsigned(ne11), unsigned(ne12)});
+    //     s_algo->setPushConstants<PushConstants>({pushConsts});
+    //     s_algo->updateDescriptors(s_kompute_context->pool.get());
+    // }
     seq.record<kp::OpTensorFill>({out});
-    seq.record<kp::OpAlgoDispatch>(s_algo);
+    //seq.record<kp::OpAlgoDispatch>(s_algo);
 }
 
 
@@ -1359,14 +1424,29 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                             && ne00%32 == 0
                             && ne11 > 1) {
                             switch (src0t) {
-                                case GGML_TYPE_F16:
                                 case GGML_TYPE_F32:
-                                    ggml_vk_mul_mat_mat_f16(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
+                                    ggml_vk_mul_mat_mat_f32(seq, 
+                                        id_src0, id_src1, id_dst,
+                                        off_src0, off_src1, off_dst,
+                                        ne00, ne01, 
+                                        nb01, nb02,
+                                        ne11, ne12,
+                                        nb11, nb12,
+                                        nb1, nb2);
                                     break;
-                                case GGML_TYPE_Q4_0:
-                                    //ggml_vk_mul_mat_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
-                                    ggml_vk_mul_mat_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
+                                case GGML_TYPE_F16:
+                                    ggml_vk_mul_mat_mat_f16(seq, 
+                                        id_src0, id_src1, id_dst,
+                                        off_src0, off_src1, off_dst,
+                                        ne00, ne01, 
+                                        nb01, nb02,
+                                        ne11, ne12,
+                                        nb11, nb12,
+                                        nb1, nb2);;
                                     break;
+                                // case GGML_TYPE_Q4_0:
+                                //     ggml_vk_mul_mat_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
+                                //     break;
                                 default: {
                                     fprintf(stderr, "%s: %s: Unsupported quantization for M*M: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
                                     goto not_implemented;
@@ -1376,9 +1456,7 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                             switch (src0t) {
                                 case GGML_TYPE_F16:
                                 case GGML_TYPE_F32:
-                                    // use matmat
-                                    ggml_vk_mul_mat_mat_f16(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
-                                    //ggml_vk_mul_mat_f16(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
+                                    ggml_vk_mul_mat_f16(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
                                     break;
                                 case GGML_TYPE_Q4_0:
                                     ggml_vk_mul_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);

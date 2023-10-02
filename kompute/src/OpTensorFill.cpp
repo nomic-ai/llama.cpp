@@ -36,7 +36,15 @@ OpTensorFill::record(const vk::CommandBuffer& commandBuffer)
     KP_LOG_DEBUG("Kompute OpTensorFill record called");
 
     for (size_t i = 0; i < this->mTensors.size(); i++) {
+        // (void) commandBuffer;
         this->mTensors[i]->recordFill(commandBuffer, 0);
+        this->mTensors[i]->recordPrimaryBufferMemoryBarrier(
+              commandBuffer,
+              vk::AccessFlagBits::eTransferWrite,
+              vk::AccessFlagBits::eShaderWrite,
+              vk::PipelineStageFlagBits::eTransfer,
+              vk::PipelineStageFlagBits::eAllCommands);
+
     }
 }
 

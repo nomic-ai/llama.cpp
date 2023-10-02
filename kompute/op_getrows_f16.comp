@@ -30,6 +30,6 @@ void main() {
     const int r = inB[i + pcs.inBOff];
 
     for (int j = 0; j < pcs.ne00; j++) {
-        out_[i*pcs.nb1 + j + pcs.outOff] = inA[r*pcs.nb01/2+j + pcs.inAOff];
+        out_[i*pcs.nb1/4 + j + pcs.outOff] = inA[r*pcs.nb01/2+j + pcs.inAOff];
     }
 }
