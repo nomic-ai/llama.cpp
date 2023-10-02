@@ -26,8 +26,11 @@ layout(push_constant) uniform parameter {
   uint outOff;
   int ne00;
   int ne01;
+  int ne02;
   int ne11;
+  int ne12;
   uint nb01;
+  uint nb02;
   uint nb11;
   uint nb12;
   uint nb1;
@@ -38,16 +41,16 @@ pcs;
 
 void main() {
   uvec3 gid = gl_GlobalInvocationID;
-  if (gid.x == 0 && gid.y == 0) { 
-    debugPrintfEXT("f32_32mm ne00/M=%d ne01/N=%d ne11/P=%d z=%d\n", pcs.ne00, pcs.ne01, pcs.ne11, gid.z);
+  if (gid.x == 0 && gid.y == 0 && gid.z==0) {
+    debugPrintfEXT("f32_32mm ne00/M=%d ne01/N=%d ne11/P=%d ne02=%d ne12=%d z=%d ne0=%d, ne1=%d\n", pcs.ne00, pcs.ne01, pcs.ne11, pcs.ne02, pcs.ne12, gid.z, pcs.nb1/4, (pcs.nb2/pcs.nb1));
   }
 
-    const uint x = (gid.x*pcs.nb01) / 4 + pcs.inAOff; // Based from inA
-    const uint y = (gid.y*pcs.nb11 + gid.z*pcs.nb12) / 4 + pcs.inBOff; // based from inB
-    float sum = 0.0f;
-    for (uint i = 0; i < pcs.ne00; i ++) {
-        sum += float(inA[x+i]) * float(inB[y+i]);
-    }
+  const uint x = (gid.x*pcs.nb01 + gid.z/(pcs.ne12/pcs.ne02)*pcs.nb02) / 4 + pcs.inAOff; // Based from inA
+  const uint y = (gid.y*pcs.nb11 + gid.z/(pcs.ne02/pcs.ne12)*pcs.nb12) / 4 + pcs.inBOff; // based from inB
+  float sum = 0.0f;
+  for (uint i = 0; i < pcs.ne00; i ++) {
+      sum += float(inA[x+i]) * float(inB[y+i]);
+  }
 
-    out_[gid.z*(pcs.nb2/4) + gid.y*(pcs.nb1/4) + gid.x + pcs.outOff] = sum;
+  out_[gid.z*(pcs.nb2/4) + gid.y*(pcs.nb1/4) + gid.x + pcs.outOff] = sum;
 }

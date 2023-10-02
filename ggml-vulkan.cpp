@@ -919,7 +919,7 @@ void ggml_vk_mul_mat_mat_f32(kp::Sequence& seq,
                          const std::shared_ptr<kp::Tensor>& inB,
                          const std::shared_ptr<kp::Tensor>& out,
                          uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
-                         int32_t ne00, int32_t ne01,
+                         int32_t ne00, int32_t ne01, int32_t ne02,
                          uint32_t nb01, uint32_t nb02,
                          int32_t ne11, int32_t ne12,
                          uint32_t nb11, uint32_t nb12,
@@ -929,14 +929,14 @@ void ggml_vk_mul_mat_mat_f32(kp::Sequence& seq,
 
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t ne00, ne01, ne11;
+        int32_t ne00, ne01, ne02, ne11, ne12;
         uint32_t nb01, nb02;
         uint32_t nb11, nb12;
-        uint32_t n0, nb1, nb2;
+        uint32_t nb1, nb2;
     } pushConsts {
         safe_divide(inAOff, 4), safe_divide(inBOff, 4), safe_divide(outOff, 4),
-        ne00, ne01, ne11, 
-        nb01, nb11, nb12,
+        ne00, ne01, ne02, ne11, ne12,
+        nb01, nb02, nb11, nb12,
         nb1, nb2
     };
 
@@ -955,7 +955,7 @@ void ggml_vk_mul_mat_mat_f32(kp::Sequence& seq,
         s_algo->setTensors({inA, inB, out});
         s_algo->setWorkgroup({unsigned(ne01),
                               unsigned(ne11),
-                              unsigned(ne12)});
+                              unsigned(std::max(ne12, ne02))});
         s_algo->setPushConstants<PushConstants>({pushConsts});
         s_algo->updateDescriptors(s_kompute_context->pool.get());
     }
@@ -968,7 +968,7 @@ void ggml_vk_mul_mat_mat_f16(kp::Sequence& seq,
                           const std::shared_ptr<kp::Tensor>& inB,
                           const std::shared_ptr<kp::Tensor>& out,
                           uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
-                         int32_t ne00, int32_t ne01,
+                         int32_t ne00, int32_t ne01, int32_t ne02,
                          uint32_t nb01, uint32_t nb02,
                          int32_t ne11, int32_t ne12,
                          uint32_t nb11, uint32_t nb12,
@@ -978,14 +978,14 @@ void ggml_vk_mul_mat_mat_f16(kp::Sequence& seq,
 
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t ne00, ne01, ne11;
+        int32_t ne00, ne01, ne02, ne11, ne12;
         uint32_t nb01, nb02;
         uint32_t nb11, nb12;
-        uint32_t n0, nb1, nb2;
+        uint32_t nb1, nb2;
     } pushConsts {
         safe_divide(inAOff, 4), safe_divide(inBOff, 4), safe_divide(outOff, 4),
-        ne00, ne01, ne11, 
-        nb01, nb11, nb12,
+        ne00, ne01, ne02, ne11, ne12,
+        nb01, nb02, nb11, nb12,
         nb1, nb2
     };
 
@@ -1004,7 +1004,7 @@ void ggml_vk_mul_mat_mat_f16(kp::Sequence& seq,
         s_algo->setTensors({inA, inB, out});
         s_algo->setWorkgroup({unsigned(ne01),
                               unsigned(ne11),
-                              unsigned(ne12),
+                              unsigned(std::max(ne12, ne02)),
                               });
         s_algo->setPushConstants<PushConstants>({pushConsts});
         s_algo->updateDescriptors(s_kompute_context->pool.get());
@@ -1421,14 +1421,15 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
 
                         if (!ggml_is_transposed(src0)
                             && !ggml_is_transposed(src1)
-                            && ne00%32 == 0
-                            && ne11 > 1) {
+                            //&& ne00%32 == 0
+                            //&& ne11 > 1
+                            ) {
                             switch (src0t) {
                                 case GGML_TYPE_F32:
                                     ggml_vk_mul_mat_mat_f32(seq, 
                                         id_src0, id_src1, id_dst,
                                         off_src0, off_src1, off_dst,
-                                        ne00, ne01, 
+                                        ne00, ne01, ne02,
                                         nb01, nb02,
                                         ne11, ne12,
                                         nb11, nb12,
@@ -1438,7 +1439,7 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                                     ggml_vk_mul_mat_mat_f16(seq, 
                                         id_src0, id_src1, id_dst,
                                         off_src0, off_src1, off_dst,
-                                        ne00, ne01, 
+                                        ne00, ne01, ne02,
                                         nb01, nb02,
                                         ne11, ne12,
                                         nb11, nb12,
