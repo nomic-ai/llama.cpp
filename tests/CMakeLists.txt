@@ -38,6 +38,6 @@ llama_build_and_test_executable(test-grad0.cpp) # SLOW
 # llama_build_and_test_executable(test-opt.cpp) # SLOW
 
 # dummy executable - not installed
-get_filename_component(TEST_TARGET test-c.c NAME_WE)
-add_executable(${TEST_TARGET} test-c.c)
-target_link_libraries(${TEST_TARGET} PRIVATE llama)
+#get_filename_component(TEST_TARGET test-c.c NAME_WE)
+#add_executable(${TEST_TARGET} test-c.c)
+#target_link_libraries(${TEST_TARGET} PRIVATE llama)
