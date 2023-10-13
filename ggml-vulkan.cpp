@@ -1633,10 +1633,7 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                         }
 
                         if (!ggml_is_transposed(src0)
-                            && !ggml_is_transposed(src1)
-                            //&& ne00%32 == 0
-                            && ne11 > 1
-                            ) {
+                            && !ggml_is_transposed(src1)) {
                             switch (src0t) {
                                 case GGML_TYPE_F32:
                                     ggml_vk_mul_mat_mat_f32(seq,
@@ -1705,24 +1702,8 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                             }
                         } else {
                             switch (src0t) {
-                                case GGML_TYPE_F16:
-                                case GGML_TYPE_F32:
-                                    ggml_vk_mul_mat_f16(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, ne02, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
-                                    break;
-                                case GGML_TYPE_Q8_0:
-                                    ggml_vk_mul_mat_q8_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, nb01, nb02, ne11, ne12, nb11, nb12, ne0, ne1);
-                                    break;
-                                case GGML_TYPE_Q4_0:
-                                    ggml_vk_mul_mat_q4_0(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
-                                    break;
-                                case GGML_TYPE_Q4_1:
-                                    ggml_vk_mul_mat_q4_1(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
-                                    break;
-                                case GGML_TYPE_Q6_K:
-                                    ggml_vk_mul_mat_q6_k(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02);
-                                    break;
                                 default: {
-                                    fprintf(stderr, "%s: %s: Unsupported quantization: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
+                                    fprintf(stderr, "%s: %s: Transposed matmul??: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
                                     goto not_implemented;
                                 }
                             }
