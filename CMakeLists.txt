@@ -93,6 +93,7 @@ option(LLAMA_HIPBLAS                         "llama: use hipBLAS"               
 option(LLAMA_CLBLAST                         "llama: use CLBlast"                               OFF)
 option(LLAMA_METAL                           "llama: use Metal"                                 ${LLAMA_METAL_DEFAULT})
 option(LLAMA_METAL_NDEBUG                    "llama: disable Metal debugging"                   OFF)
+option(LLAMA_KOMPUTE                         "llama: use Kompute"                               OFF)
 option(LLAMA_MPI                             "llama: use MPI"                                   OFF)
 option(LLAMA_QKK_64                          "llama: use super-block size of 64 for k-quants"   OFF)
 
@@ -388,6 +389,144 @@ if (LLAMA_HIPBLAS)
     endif()
 endif()
 
+if (LLAMA_KOMPUTE)
+    add_compile_definitions(VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+    find_package(Vulkan COMPONENTS glslc REQUIRED)
+    find_program(glslc_executable NAMES glslc HINTS Vulkan::glslc)
+    if (NOT glslc_executable)
+        message(FATAL_ERROR "glslc not found")
+    endif()
+
+    function(compile_shader)
+      set(options)
+      set(oneValueArgs)
+      set(multiValueArgs SOURCES)
+      cmake_parse_arguments(compile_shader "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+      foreach(source ${compile_shader_SOURCES})
+        set(spv_file ${source}.spv)
+        add_custom_command(
+            OUTPUT ${spv_file}
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${source}
+              ${CMAKE_CURRENT_SOURCE_DIR}/kompute/common.comp
+              ${CMAKE_CURRENT_SOURCE_DIR}/kompute/op_getrows.comp
+              ${CMAKE_CURRENT_SOURCE_DIR}/kompute/op_mul_mv_q_n.comp
+              COMMAND ${glslc_executable} --target-env=vulkan1.2 -o ${spv_file} ${CMAKE_CURRENT_SOURCE_DIR}/${source}
+            COMMENT "Compiling ${source} to ${source}.spv"
+        )
+
+        get_filename_component(RAW_FILE_NAME ${spv_file} NAME)
+        set(FILE_NAME "shader${RAW_FILE_NAME}")
+        string(REPLACE ".comp.spv" ".h" HEADER_FILE ${FILE_NAME})
+        string(TOUPPER ${HEADER_FILE} HEADER_FILE_DEFINE)
+        string(REPLACE "." "_" HEADER_FILE_DEFINE "${HEADER_FILE_DEFINE}")
+        set(OUTPUT_HEADER_FILE "${HEADER_FILE}")
+        message(STATUS "${HEADER_FILE} generating ${HEADER_FILE_DEFINE}")
+        add_custom_command(
+          OUTPUT ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo "/*THIS FILE HAS BEEN AUTOMATICALLY GENERATED - DO NOT EDIT*/" > ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo \"\#ifndef ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo \"\#define ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo "namespace kp {" >> ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo "namespace shader_data {" >> ${OUTPUT_HEADER_FILE}
+          COMMAND xxd -i ${spv_file} >> ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo "}}" >> ${OUTPUT_HEADER_FILE}
+          COMMAND ${CMAKE_COMMAND} -E echo \"\#endif // define ${HEADER_FILE_DEFINE}\" >> ${OUTPUT_HEADER_FILE}
+          DEPENDS ${spv_file}
+          COMMENT "Converting to hpp: ${FILE_NAME}"
+        )
+      endforeach()
+    endfunction()
+
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kompute/CMakeLists.txt")
+        message(STATUS "Kompute found")
+        set(KOMPUTE_OPT_LOG_LEVEL Error CACHE STRING "Kompute log level")
+        add_subdirectory(kompute)
+
+        # Compile our shaders
+        compile_shader(SOURCES
+          kompute/op_scale.comp
+          kompute/op_scale_8.comp
+          kompute/op_add.comp
+          kompute/op_addrow.comp
+          kompute/op_mul.comp
+          kompute/op_mulrow.comp
+          kompute/op_silu.comp
+          kompute/op_relu.comp
+          kompute/op_gelu.comp
+          kompute/op_softmax.comp
+          kompute/op_norm.comp
+          kompute/op_rmsnorm.comp
+          kompute/op_diagmask.comp
+          kompute/op_mul_mat_mat_f32.comp
+          kompute/op_mul_mat_f16.comp
+          kompute/op_mul_mat_q8_0.comp
+          kompute/op_mul_mat_q4_0.comp
+          kompute/op_mul_mat_q4_1.comp
+          kompute/op_mul_mat_q6_k.comp
+          kompute/op_getrows_f16.comp
+          kompute/op_getrows_q4_0.comp
+          kompute/op_getrows_q4_1.comp
+          kompute/op_getrows_q6_k.comp
+          kompute/op_rope_f16.comp
+          kompute/op_rope_f32.comp
+          kompute/op_cpy_f16_f16.comp
+          kompute/op_cpy_f16_f32.comp
+          kompute/op_cpy_f32_f16.comp
+          kompute/op_cpy_f32_f32.comp
+        )
+
+        # Create a custom target for our generated shaders
+        add_custom_target(generated_shaders DEPENDS
+          shaderop_scale.h
+          shaderop_scale_8.h
+          shaderop_add.h
+          shaderop_addrow.h
+          shaderop_mul.h
+          shaderop_mulrow.h
+          shaderop_silu.h
+          shaderop_relu.h
+          shaderop_gelu.h
+          shaderop_softmax.h
+          shaderop_norm.h
+          shaderop_rmsnorm.h
+          shaderop_diagmask.h
+          shaderop_mul_mat_mat_f32.h
+          shaderop_mul_mat_f16.h
+          shaderop_mul_mat_q8_0.h
+          shaderop_mul_mat_q4_0.h
+          shaderop_mul_mat_q4_1.h
+          shaderop_mul_mat_q6_k.h
+          shaderop_getrows_f16.h
+          shaderop_getrows_q4_0.h
+          shaderop_getrows_q4_1.h
+          shaderop_getrows_q6_k.h
+          shaderop_rope_f16.h
+          shaderop_rope_f32.h
+          shaderop_cpy_f16_f16.h
+          shaderop_cpy_f16_f32.h
+          shaderop_cpy_f32_f16.h
+          shaderop_cpy_f32_f32.h
+        )
+
+        # Create a custom command that depends on the generated_shaders
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp
+            COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp
+            DEPENDS generated_shaders
+            COMMENT "Ensuring shaders are generated before compiling ggml-vulkan.cpp"
+        )
+
+        # Add the stamp to the main sources to ensure dependency tracking
+        set(GGML_SOURCES_KOMPUTE ggml-vulkan.cpp ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp)
+        set(GGML_HEADERS_KOMPUTE ggml-vulkan.h ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp)
+        add_compile_definitions(GGML_USE_KOMPUTE)
+        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} kompute)
+        set(LLAMA_EXTRA_INCLUDES ${LLAMA_EXTRA_INCLUDES} ${CMAKE_BINARY_DIR})
+    else()
+        message(WARNING "Kompute not found")
+    endif()
+endif()
+
 if (LLAMA_ALL_WARNINGS)
     if (NOT MSVC)
         set(warning_flags -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function)
@@ -658,6 +797,7 @@ add_library(ggml OBJECT
             ${GGML_SOURCES_METAL} ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_MPI} ${GGML_HEADERS_MPI}
             ${GGML_SOURCES_EXTRA} ${GGML_HEADERS_EXTRA}
+            ${GGML_SOURCES_KOMPUTE} ${GGML_HEADERS_KOMPUTE}
             )
 
 target_include_directories(ggml PUBLIC . ${LLAMA_EXTRA_INCLUDES})

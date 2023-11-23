@@ -11,6 +11,8 @@
 #  include "ggml-cuda.h"
 #elif defined(GGML_USE_CLBLAST)
 #  include "ggml-opencl.h"
+#elif defined(GGML_USE_KOMPUTE)
+#   include "ggml-vulkan.h"
 #endif
 
 #ifdef GGML_USE_METAL
@@ -726,6 +728,9 @@ static std::string llama_format_win_err(DWORD err) {
 struct llama_buffer {
     void * data = NULL;
     size_t size = 0;
+#if defined(GGML_USE_KOMPUTE)
+    ggml_vk_memory memory;
+#endif
 
     // fallback to malloc / free
     // useful in cases where CUDA can try to allocate PINNED memory
@@ -734,6 +739,14 @@ struct llama_buffer {
     void resize(size_t n) {
         llama_host_free(data);
 
+#if defined(GGML_USE_KOMPUTE)
+        if (ggml_vk_has_device()) {
+            this->memory = ggml_vk_allocate(n);
+            this->data = (uint8_t*)memory.data;
+            this->size = n;
+            return;
+        }
+#endif
         data = llama_host_malloc(n);
         if (!data) {
             fallback = true;
@@ -748,6 +761,13 @@ struct llama_buffer {
 
     ~llama_buffer() {
         if (data) {
+#if defined(GGML_USE_KOMPUTE)
+            if (ggml_vk_has_device()) {
+                ggml_vk_free_memory(memory);
+                data = NULL;
+                return;
+            }
+#endif
             if (fallback) { // NOLINT
                 free(data);
             } else {
@@ -1478,11 +1498,14 @@ struct llama_context {
 
 #ifdef GGML_USE_METAL
     ggml_metal_context * ctx_metal = NULL;
+#elif defined(GGML_USE_KOMPUTE)
+    ggml_kompute_context * ctx_kompute = NULL;
 #endif
 
 #ifdef GGML_USE_MPI
     ggml_mpi_context * ctx_mpi = NULL;
 #endif
+
 };
 
 //
@@ -1902,6 +1925,9 @@ struct llama_model_loader {
             use_mmap = false;
         }
 
+#if defined(GGML_USE_KOMPUTE)
+        use_mmap = false;
+#endif
         this->use_mmap = use_mmap;
     }
 
@@ -3396,7 +3422,7 @@ static void llm_load_tensors(
     model.t_load_us = ggml_time_us() - model.t_start_us;
 }
 
-static bool llama_model_load(const std::string & fname, llama_model & model, const llama_model_params & params) {
+static bool llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
         llama_model_loader ml(fname, params.use_mmap);
 
@@ -3416,6 +3442,21 @@ static bool llama_model_load(const std::string & fname, llama_model & model, con
             LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
             return true;
         }
+
+#ifdef GGML_USE_KOMPUTE
+        if (ggml_vk_has_device() && params.n_gpu_layers > 0 && (
+            !(model.arch == LLM_ARCH_LLAMA || model.arch == LLM_ARCH_FALCON)
+            || !(
+                model.ftype == LLAMA_FTYPE_ALL_F32 ||
+                model.ftype == LLAMA_FTYPE_MOSTLY_F16 ||
+                model.ftype == LLAMA_FTYPE_MOSTLY_Q4_0 ||
+                model.ftype == LLAMA_FTYPE_MOSTLY_Q4_1
+            )
+        )) {
+            // disable Vulkan due to unsupported model architecture or quantization type
+            params.n_gpu_layers = 0;
+        }
+#endif
 
         llm_load_tensors(
             ml, model, params.n_gpu_layers, params.main_gpu, params.tensor_split, params.use_mlock,
@@ -3463,7 +3504,8 @@ static struct ggml_tensor * llm_build_inp_embd(
         const llama_hparams & hparams,
           const llama_batch & batch,
          struct ggml_tensor * tok_embd,
-         const llm_build_cb & cb) {
+         const llm_build_cb & cb,
+        struct ggml_tensor ** to_device_tensor = nullptr) {
     const int64_t n_embd = hparams.n_embd;
 
     struct ggml_tensor * inpL;
@@ -3471,6 +3513,9 @@ static struct ggml_tensor * llm_build_inp_embd(
     if (batch.token) {
         struct ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, batch.n_tokens);
         cb(inp_tokens, "inp_tokens", -1);
+        if (to_device_tensor) {
+            *to_device_tensor = inp_tokens;
+        }
 
         inpL = ggml_get_rows(ctx, tok_embd, inp_tokens);
     } else {
@@ -3479,6 +3524,9 @@ static struct ggml_tensor * llm_build_inp_embd(
 #endif
 
         inpL = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
+        if (to_device_tensor) {
+            *to_device_tensor = inpL;
+        }
     }
 
     return inpL;
@@ -3486,7 +3534,7 @@ static struct ggml_tensor * llm_build_inp_embd(
 
 // Persimmon: n_rot = n_embd_head/2
 // Other:     n_rot = n_embd_head
-static void llm_build_k_shift(
+static struct ggml_tensor * llm_build_k_shift(
       struct ggml_context * ctx,
       const llama_hparams & hparams,
       const llama_cparams & cparams,
@@ -3535,6 +3583,8 @@ static void llm_build_k_shift(
         cb(tmp, "K_shifted", il);
         ggml_build_forward_expand(graph, tmp);
     }
+
+    return K_shift;
 }
 
 static void llm_build_kv_store(
@@ -3806,6 +3856,10 @@ struct llm_build_context {
 
     llama_buffer & buf_compute;
 
+#if defined(GGML_USE_KOMPUTE)
+    ggml_kompute_context * ctx_kompute;
+#endif
+
     struct ggml_context * ctx0 = nullptr;
 
     // TODO: consider making the entire interface noexcept
@@ -3840,7 +3894,11 @@ struct llm_build_context {
         n_orig_ctx    (cparams.n_yarn_orig_ctx),
         do_rope_shift (worst_case || kv_self.has_shift),
         cb            (cb),
-        buf_compute   (lctx.buf_compute) {
+        buf_compute   (lctx.buf_compute)
+#if defined(GGML_USE_KOMPUTE)
+      , ctx_kompute   (lctx.ctx_kompute)
+#endif
+        {
             GGML_ASSERT(!!kv_self.ctx);
 
             // all initializations should be done in init()
@@ -3870,8 +3928,9 @@ struct llm_build_context {
 
         struct ggml_tensor * cur;
         struct ggml_tensor * inpL;
+        struct ggml_tensor * to_device_tensor = nullptr;
 
-        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb);
+        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb, &to_device_tensor);
         cb(inpL, "inp_embd", -1);
 
         // inp_pos - contains the positions
@@ -3887,8 +3946,9 @@ struct llm_build_context {
         cb(KQ_mask, "KQ_mask", -1);
 
         // shift the entire K-cache if needed
+        struct ggml_tensor * K_shift = nullptr;
         if (do_rope_shift) {
-            llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE, n_ctx, n_embd_head, freq_base, freq_scale, cb);
+            K_shift = llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE, n_ctx, n_embd_head, freq_base, freq_scale, cb);
         }
 
         for (int il = 0; il < n_layer; ++il) {
@@ -3971,6 +4031,21 @@ struct llm_build_context {
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);
+
+#if defined(GGML_USE_KOMPUTE)
+        if (ctx_kompute) {
+            if (!ggml_vk_has_h2d_all(ctx_kompute)) {
+                ggml_vk_h2d_all(ctx_kompute);
+            } else {
+                ggml_vk_h2d_tensor(ctx_kompute, to_device_tensor);
+                ggml_vk_h2d_tensor(ctx_kompute, inp_pos);
+                ggml_vk_h2d_tensor(ctx_kompute, KQ_mask);
+                if (K_shift) {
+                    ggml_vk_h2d_tensor(ctx_kompute, K_shift);
+                }
+            }
+        }
+#endif
 
         return gf;
     }
@@ -4100,8 +4175,9 @@ struct llm_build_context {
 
         struct ggml_tensor * cur;
         struct ggml_tensor * inpL;
+        struct ggml_tensor * to_device_tensor = nullptr;
 
-        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb);
+        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb, &to_device_tensor);
         cb(inpL, "inp_embd", -1);
 
         // inp_pos - contains the positions
@@ -4117,8 +4193,9 @@ struct llm_build_context {
         cb(KQ_mask, "KQ_mask", -1);
 
         // shift the entire K-cache if needed
+        struct ggml_tensor * K_shift = nullptr;
         if (do_rope_shift) {
-            llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE_NEOX, n_ctx, n_embd_head, freq_base, freq_scale, cb);
+            K_shift = llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE_NEOX, n_ctx, n_embd_head, freq_base, freq_scale, cb);
         }
 
         for (int il = 0; il < n_layer; ++il) {
@@ -4213,6 +4290,21 @@ struct llm_build_context {
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);
+
+#if defined(GGML_USE_KOMPUTE)
+        if (ctx_kompute) {
+            if (!ggml_vk_has_h2d_all(ctx_kompute)) {
+                ggml_vk_h2d_all(ctx_kompute);
+            } else {
+                ggml_vk_h2d_tensor(ctx_kompute, to_device_tensor);
+                ggml_vk_h2d_tensor(ctx_kompute, inp_pos);
+                ggml_vk_h2d_tensor(ctx_kompute, KQ_mask);
+                if (K_shift) {
+                    ggml_vk_h2d_tensor(ctx_kompute, K_shift);
+                }
+            }
+        }
+#endif
 
         return gf;
     }
@@ -5596,6 +5688,21 @@ static int llama_decode_internal(
     } else {
         ggml_graph_compute_helper(lctx.work_buffer, gf, n_threads);
     }
+#elif defined(GGML_USE_KOMPUTE)
+    if (lctx.ctx_kompute && n_tokens == 1) {
+        ggml_vk_graph_compute(lctx.ctx_kompute, gf);
+        ggml_vk_d2h_tensor(lctx.ctx_kompute, res);
+    } else {
+        if (lctx.ctx_kompute) {
+            ggml_vk_d2h_tensor(lctx.ctx_kompute, kv_self.k);
+            ggml_vk_d2h_tensor(lctx.ctx_kompute, kv_self.v);
+        }
+        ggml_graph_compute_helper(lctx.work_buffer, gf, n_threads);
+        if (lctx.ctx_kompute) {
+            ggml_vk_h2d_tensor(lctx.ctx_kompute, kv_self.k);
+            ggml_vk_h2d_tensor(lctx.ctx_kompute, kv_self.v);
+        }
+    }
 #else
     ggml_graph_compute_helper(lctx.work_buffer, gf, n_threads);
 #endif
@@ -5655,6 +5762,7 @@ static int llama_decode_internal(
         }
     }
 
+#if 0
     // extract embeddings
     if (!lctx.embedding.empty()) {
         auto & embedding_out = lctx.embedding;
@@ -5662,6 +5770,7 @@ static int llama_decode_internal(
         embedding_out.resize(n_embd);
         memcpy(embedding_out.data(), (float *) ggml_get_data(embeddings) + (n_embd*(n_tokens - 1)), sizeof(float)*n_embd);
     }
+#endif
 
     // measure the performance only for the single-token evals
     if (n_tokens == 1) {
@@ -8092,6 +8201,7 @@ static int llama_apply_lora_from_file_internal(
 ) {
     LLAMA_LOG_INFO("%s: applying lora adapter from '%s' - please wait ...\n", __func__, path_lora);
 
+
     const int64_t t_start_lora_us = ggml_time_us();
 
     auto fin = std::ifstream(path_lora, std::ios::binary);
@@ -8462,9 +8572,11 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
-struct llama_model * llama_load_model_from_file(
-                             const char * path_model,
-              struct llama_model_params   params) {
+static struct llama_model * llama_load_model_from_file_internal(
+    const char * path_model, struct llama_model_params * params_p
+) {
+    auto & params = *params_p;
+
     ggml_time_init();
 
     llama_model * model = new llama_model;
@@ -8492,6 +8604,10 @@ struct llama_model * llama_load_model_from_file(
     }
 
     return model;
+}
+
+struct llama_model * llama_load_model_from_file(const char * path_model, struct llama_model_params params) {
+    return llama_load_model_from_file_internal(path_model, &params);
 }
 
 void llama_free_model(struct llama_model * model) {
@@ -8681,6 +8797,20 @@ struct llama_context * llama_new_context_with_model(
             LLAMA_METAL_CHECK_BUF(ggml_metal_add_buffer(ctx->ctx_metal, "alloc", ctx->buf_alloc.data, ctx->buf_alloc.size, 0));
 #undef LLAMA_METAL_CHECK_BUF
         }
+#elif defined(GGML_USE_KOMPUTE)
+    if (ggml_vk_has_device() && model->n_gpu_layers > 0) {
+        // this allocates all Vulkan resources and memory buffers
+        ctx->ctx_kompute = ggml_vk_init();
+
+        const size_t max_size = ggml_get_max_tensor_size(ctx->model.ctx);
+
+        printf("%s: max tensor size = %8.2f MB\n", __func__, max_size/1024.0/1024.0);
+
+        ggml_vk_add_buffer(ctx->ctx_kompute, "data", ctx->model.buf.memory);
+        ggml_vk_add_buffer(ctx->ctx_kompute, "eval", ctx->buf_compute.memory);
+        ggml_vk_add_buffer(ctx->ctx_kompute, "kv", ctx->kv_self.buf.memory);
+        ggml_vk_add_buffer(ctx->ctx_kompute, "alloc", ctx->buf_alloc.memory);
+    }
 #endif
     }
 
@@ -8702,7 +8832,13 @@ struct llama_context * llama_new_context_with_model(
 }
 
 void llama_free(struct llama_context * ctx) {
+#ifdef GGML_USE_KOMPUTE
+    ggml_vk_free(ctx->ctx_kompute);
+#endif
     delete ctx;
+#ifdef GGML_USE_KOMPUTE
+    ggml_vk_free_device();
+#endif
 }
 
 const llama_model * llama_get_model(const struct llama_context * ctx) {
