@@ -8572,7 +8572,7 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
-static struct llama_model * llama_load_model_from_file_internal(
+struct llama_model * llama_load_model_from_file_gpt4all(
     const char * path_model, struct llama_model_params * params_p
 ) {
     auto & params = *params_p;
@@ -8607,7 +8607,7 @@ static struct llama_model * llama_load_model_from_file_internal(
 }
 
 struct llama_model * llama_load_model_from_file(const char * path_model, struct llama_model_params params) {
-    return llama_load_model_from_file_internal(path_model, &params);
+    return llama_load_model_from_file_gpt4all(path_model, &params);
 }
 
 void llama_free_model(struct llama_model * model) {
