@@ -291,7 +291,7 @@ ggml_vk_device ggml_vk_current_device() {
 
     std::vector<ggml_vk_device> devices = ggml_vk_available_devices(0);
     ggml_vk_filterByName(devices, komputeManager()->physicalDevice()->getProperties().deviceName);
-    return devices.front();
+    return devices.empty() ? ggml_vk_device() : devices.front();
 }
 
 ggml_kompute_context *ggml_vk_init() {
