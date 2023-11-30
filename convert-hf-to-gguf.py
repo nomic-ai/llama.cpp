@@ -462,6 +462,11 @@ class MPTModel(Model):
 
             self.gguf_writer.add_tensor(new_name, data)
 
+            # note: MPT output is tied to (same as) wte in original model;
+            # for easier implementation in llama.cpp it's duplicated in GGUF, though :/
+            if new_name == "token_embd.weight":
+                self.gguf_writer.add_tensor("output.weight", data)
+
 
 class BaichuanModel(Model):
     def set_vocab(self):
