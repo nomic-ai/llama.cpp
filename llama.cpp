@@ -12,7 +12,7 @@
 #elif defined(GGML_USE_CLBLAST)
 #  include "ggml-opencl.h"
 #elif defined(GGML_USE_KOMPUTE)
-#   include "ggml-vulkan.h"
+#   include "ggml-kompute.h"
 #endif
 
 #ifdef GGML_USE_METAL
@@ -48,7 +48,6 @@
     #endif
     #include <windows.h>
     #include <io.h>
-    #include <stdio.h> // for _fseeki64
 #endif
 
 #include <algorithm>
@@ -77,6 +76,7 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 
 #if defined(_MSC_VER)
@@ -195,6 +195,7 @@ enum llm_arch {
     LLM_ARCH_REFACT,
     LLM_ARCH_BLOOM,
     LLM_ARCH_STABLELM,
+    LLM_ARCH_QWEN,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -211,6 +212,7 @@ static std::map<llm_arch, std::string> LLM_ARCH_NAMES = {
     { LLM_ARCH_REFACT,          "refact"    },
     { LLM_ARCH_BLOOM,           "bloom"     },
     { LLM_ARCH_STABLELM,        "stablelm"  },
+    { LLM_ARCH_QWEN,            "qwen"      },
 };
 
 enum llm_kv {
@@ -521,6 +523,22 @@ static std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NAMES = 
             { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
         },
     },
+    {
+        LLM_ARCH_QWEN,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
+            { LLM_TENSOR_OUTPUT,          "output" },
+            { LLM_TENSOR_ROPE_FREQS,      "rope_freqs" },
+            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_QKV,        "blk.%d.attn_qkv" },
+            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+        },
+    },
 
     {
         LLM_ARCH_UNKNOWN,
@@ -575,21 +593,6 @@ struct LLM_TN {
 // gguf helpers
 //
 
-#define GGUF_GET_KEY(ctx, dst, func, type, req, key) \
-do { \
-    const std::string skey(key); \
-    const int kid = gguf_find_key(ctx, skey.c_str()); \
-    if (kid >= 0) { \
-        enum gguf_type ktype = gguf_get_kv_type(ctx, kid); \
-        if (ktype != (type)) { \
-            throw std::runtime_error(format("key %s has wrong type: %s", skey.c_str(), gguf_type_name(ktype))); \
-        } \
-        (dst) = func(ctx, kid); \
-    } else if (req) { \
-        throw std::runtime_error(format("key not found in model: %s", skey.c_str())); \
-    } \
-} while (0)
-
 static std::map<int8_t, std::string> LLAMA_ROPE_SCALING_TYPES = {
     { LLAMA_ROPE_SCALING_NONE,   "none"   },
     { LLAMA_ROPE_SCALING_LINEAR, "linear" },
@@ -623,7 +626,7 @@ static std::string gguf_data_to_str(enum gguf_type type, const void * data, int 
     }
 }
 
-static std::string gguf_kv_to_str(struct gguf_context * ctx_gguf, int i) {
+static std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
     const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
 
     switch (type) {
@@ -728,7 +731,7 @@ static std::string llama_format_win_err(DWORD err) {
 struct llama_buffer {
     void * data = NULL;
     size_t size = 0;
-#if defined(GGML_USE_KOMPUTE)
+#ifdef GGML_USE_KOMPUTE
     ggml_vk_memory memory;
 #endif
 
@@ -739,7 +742,7 @@ struct llama_buffer {
     void resize(size_t n) {
         llama_host_free(data);
 
-#if defined(GGML_USE_KOMPUTE)
+#ifdef GGML_USE_KOMPUTE
         if (ggml_vk_has_device()) {
             this->memory = ggml_vk_allocate(n);
             this->data = (uint8_t*)memory.data;
@@ -761,7 +764,7 @@ struct llama_buffer {
 
     ~llama_buffer() {
         if (data) {
-#if defined(GGML_USE_KOMPUTE)
+#ifdef GGML_USE_KOMPUTE
             if (memory.data) {
                 if (ggml_vk_has_device()) {
                     ggml_vk_free_memory(memory);
@@ -1140,6 +1143,12 @@ std::string llama_token_to_piece(const struct llama_context * ctx, llama_token t
 //
 
 struct llama_state {
+    llama_state() {
+#ifdef GGML_USE_METAL
+        ggml_metal_log_set_callback(log_callback, log_callback_user_data);
+#endif
+    }
+
     // We save the log callback globally
     ggml_log_callback log_callback = llama_log_callback_default;
     void * log_callback_user_data = nullptr;
@@ -1265,6 +1274,9 @@ struct llama_layer {
     struct ggml_tensor * wqkv;
 
     // attention bias
+    struct ggml_tensor * bq;
+    struct ggml_tensor * bk;
+    struct ggml_tensor * bv;
     struct ggml_tensor * bo;
     struct ggml_tensor * bqkv;
 
@@ -1507,7 +1519,6 @@ struct llama_context {
 #ifdef GGML_USE_MPI
     ggml_mpi_context * ctx_mpi = NULL;
 #endif
-
 };
 
 //
@@ -1796,6 +1807,169 @@ static std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
     return buf;
 }
 
+namespace GGUFMeta {
+    template <typename T, gguf_type gt_, T (*gfun)(const gguf_context *, const int)>
+    struct GKV_Base_Type {
+        static constexpr gguf_type gt = gt_;
+
+        static T getter(const gguf_context * ctx, const int kid) {
+            return gfun(ctx, kid);
+        }
+    };
+
+    template<typename T> struct GKV_Base;
+
+    template<> struct GKV_Base<bool        >: GKV_Base_Type<bool,         GGUF_TYPE_BOOL,    gguf_get_val_bool> {};
+    template<> struct GKV_Base<uint8_t     >: GKV_Base_Type<uint8_t,      GGUF_TYPE_UINT8,   gguf_get_val_u8  > {};
+    template<> struct GKV_Base<uint16_t    >: GKV_Base_Type<uint16_t,     GGUF_TYPE_UINT16,  gguf_get_val_u16 > {};
+    template<> struct GKV_Base<uint32_t    >: GKV_Base_Type<uint32_t,     GGUF_TYPE_UINT32,  gguf_get_val_u32 > {};
+    template<> struct GKV_Base<uint64_t    >: GKV_Base_Type<uint64_t,     GGUF_TYPE_UINT64,  gguf_get_val_u64 > {};
+    template<> struct GKV_Base<int8_t      >: GKV_Base_Type<int8_t,       GGUF_TYPE_INT8,    gguf_get_val_i8  > {};
+    template<> struct GKV_Base<int16_t     >: GKV_Base_Type<int16_t,      GGUF_TYPE_INT16,   gguf_get_val_i16 > {};
+    template<> struct GKV_Base<int32_t     >: GKV_Base_Type<int32_t,      GGUF_TYPE_INT32,   gguf_get_val_i32 > {};
+    template<> struct GKV_Base<int64_t     >: GKV_Base_Type<int64_t,      GGUF_TYPE_INT64,   gguf_get_val_i64 > {};
+    template<> struct GKV_Base<float       >: GKV_Base_Type<float,        GGUF_TYPE_FLOAT32, gguf_get_val_f32 > {};
+    template<> struct GKV_Base<double      >: GKV_Base_Type<double,       GGUF_TYPE_FLOAT64, gguf_get_val_f64 > {};
+    template<> struct GKV_Base<const char *>: GKV_Base_Type<const char *, GGUF_TYPE_STRING,  gguf_get_val_str > {};
+
+    template<> struct GKV_Base<std::string> {
+        static constexpr gguf_type gt = GGUF_TYPE_STRING;
+
+        static std::string getter(const gguf_context * ctx, const int kid) {
+            return gguf_get_val_str(ctx, kid);
+        }
+    };
+
+    struct ArrayInfo{
+        const gguf_type gt;
+        const size_t length;
+        const void * data;
+    };
+
+    template<> struct GKV_Base<ArrayInfo> {
+        public:
+        static constexpr gguf_type gt = GGUF_TYPE_ARRAY;
+        static ArrayInfo getter(const gguf_context *ctx, const int k) {
+            return ArrayInfo {
+                gguf_get_arr_type(ctx, k),
+                size_t(gguf_get_arr_n(ctx, k)),
+                gguf_get_arr_data(ctx, k),
+            };
+        }
+    };
+
+    template<typename T>
+    class GKV: public GKV_Base<T> {
+        GKV() = delete;
+
+        public:
+        static T get_kv(const gguf_context * ctx, const int k) {
+            const enum gguf_type kt = gguf_get_kv_type(ctx, k);
+
+            if (kt != GKV::gt) {
+                throw std::runtime_error(format("key %s has wrong type %s but expected type %s",
+                    gguf_get_key(ctx, k), gguf_type_name(kt), gguf_type_name(GKV::gt)));
+            }
+            return GKV::getter(ctx, k);
+        }
+
+        static const char * override_type_to_str(const llama_model_kv_override_type ty) {
+            switch (ty) {
+                case LLAMA_KV_OVERRIDE_BOOL:  return "bool";
+                case LLAMA_KV_OVERRIDE_INT:   return "int";
+                case LLAMA_KV_OVERRIDE_FLOAT: return "float";
+            }
+            return "unknown";
+        }
+
+        static bool validate_override(const llama_model_kv_override_type expected_type, const struct llama_model_kv_override *override) {
+            if (!override) { return false; }
+            if (override->tag == expected_type) {
+                LLAMA_LOG_INFO("%s: Using metadata override (%5s) '%s' = ",
+                    __func__, override_type_to_str(override->tag), override->key);
+                switch (override->tag) {
+                    case LLAMA_KV_OVERRIDE_BOOL:  {
+                        printf("%s\n", override->bool_value ? "true" : "false");
+                    } break;
+                    case LLAMA_KV_OVERRIDE_INT:   {
+                        printf("%" PRId64 "\n", override->int_value);
+                    } break;
+                    case LLAMA_KV_OVERRIDE_FLOAT: {
+                        printf("%.6f\n", override->float_value);
+                    } break;
+                    default:
+                        // Shouldn't be possible to end up here, but just in case...
+                        throw std::runtime_error(
+                            format("Unsupported attempt to override %s type for metadata key %s\n",
+                                override_type_to_str(override->tag), override->key));
+                }
+                return true;
+            }
+            LLAMA_LOG_WARN("%s: Warning: Bad metadata override type for key '%s', expected %s but got %s\n",
+                __func__, override->key, override_type_to_str(expected_type), override_type_to_str(override->tag));
+            return false;
+        }
+
+        template<typename OT>
+        static typename std::enable_if<std::is_same<OT, bool>::value, bool>::type
+        try_override(OT & target, const struct llama_model_kv_override *override) {
+            if (validate_override(LLAMA_KV_OVERRIDE_BOOL, override)) {
+                target = override->bool_value;
+                return true;
+            }
+            return true;
+        }
+
+        template<typename OT>
+        static typename std::enable_if<!std::is_same<OT, bool>::value && std::is_integral<OT>::value, bool>::type
+        try_override(OT & target, const struct llama_model_kv_override *override) {
+            if (validate_override(LLAMA_KV_OVERRIDE_INT, override)) {
+                target = override->int_value;
+                return true;
+            }
+            return false;
+        }
+
+        template<typename OT>
+        static typename std::enable_if<std::is_floating_point<OT>::value, bool>::type
+        try_override(T & target, const struct llama_model_kv_override *override) {
+            if (validate_override(LLAMA_KV_OVERRIDE_FLOAT, override)) {
+                target = override->float_value;
+                return true;
+            }
+            return false;
+        }
+
+        template<typename OT>
+        static typename std::enable_if<std::is_same<OT, std::string>::value, bool>::type
+        try_override(T & target, const struct llama_model_kv_override *override) {
+            (void)target;
+            (void)override;
+            if (!override) { return false; }
+            // Currently, we should never end up here so it would be a bug if we do.
+            throw std::runtime_error(format("Unsupported attempt to override string type for metadata key %s\n",
+                override ? override->key : "NULL"));
+        }
+
+        static bool set(const gguf_context * ctx, const int k, T & target, const struct llama_model_kv_override *override = nullptr) {
+            if (try_override<T>(target, override)) {
+                return true;
+            }
+            if (k < 0) { return false; }
+            target = get_kv(ctx, k);
+            return true;
+        }
+
+        static bool set(const gguf_context * ctx, const char * key, T & target, const struct llama_model_kv_override *override = nullptr) {
+            return set(ctx, gguf_find_key(ctx, key), target, override);
+        }
+
+        static bool set(const gguf_context * ctx, const std::string & key, T & target, const struct llama_model_kv_override *override = nullptr) {
+            return set(ctx, key.c_str(), target, override);
+        }
+    };
+}
+
 struct llama_model_loader {
     int n_kv      = 0;
     int n_tensors = 0;
@@ -1811,20 +1985,33 @@ struct llama_model_loader {
     llama_fver  fver;
 
     std::unique_ptr<llama_mmap> mapping;
+    std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
 
     struct gguf_context * ctx_gguf = NULL;
     struct ggml_context * ctx_meta = NULL;
 
-    llama_model_loader(const std::string & fname, bool use_mmap) : file(fname.c_str(), "rb") {
+    std::string arch_name;
+    LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
+
+    llama_model_loader(const std::string & fname, bool use_mmap, const struct llama_model_kv_override * param_overrides_p) : file(fname.c_str(), "rb") {
         struct gguf_init_params params = {
             /*.no_alloc = */ true,
             /*.ctx      = */ &ctx_meta,
         };
 
+        if (param_overrides_p != nullptr) {
+            for (const struct llama_model_kv_override *p = param_overrides_p; p->key[0] != 0; p++) {
+                kv_overrides.insert({std::string(p->key), *p});
+            }
+        }
+
         ctx_gguf = gguf_init_from_file(fname.c_str(), params);
         if (!ctx_gguf) {
             throw std::runtime_error(format("%s: failed to load model from %s\n", __func__, fname.c_str()));
         }
+
+        get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
+        llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
         n_kv      = gguf_get_n_kv(ctx_gguf);
         n_tensors = gguf_get_n_tensors(ctx_gguf);
@@ -1893,6 +2080,7 @@ struct llama_model_loader {
                 }
             }
 
+            LLAMA_LOG_INFO("%s: Dumping metadata keys/values. Note: KV overrides do not apply in this output.\n", __func__);
             for (int i = 0; i < n_kv; i++) {
                 const char * name           = gguf_get_key(ctx_gguf, i);
                 const enum gguf_type type   = gguf_get_kv_type(ctx_gguf, i);
@@ -1926,7 +2114,7 @@ struct llama_model_loader {
             use_mmap = false;
         }
 
-#if defined(GGML_USE_KOMPUTE)
+#ifdef GGML_USE_KOMPUTE
         use_mmap = false;
 #endif
         this->use_mmap = use_mmap;
@@ -1941,19 +2129,59 @@ struct llama_model_loader {
         }
     }
 
+    template<typename T>
+    typename std::enable_if<std::is_integral<T>::value, bool>::type
+    get_arr_n(const std::string & key, T & result, const bool required = true) {
+        const int kid = gguf_find_key(ctx_gguf, key.c_str());
+
+        if (kid < 0) {
+            if (required) {
+                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+            }
+            return false;
+        }
+
+        struct GGUFMeta::ArrayInfo arr_info =
+            GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(ctx_gguf, kid);
+
+
+        result = arr_info.length;
+        return true;
+    }
+
+    template<typename T>
+    typename std::enable_if<std::is_integral<T>::value, bool>::type
+    get_arr_n(const enum llm_kv kid, T & result, const bool required = true) {
+        return get_arr_n(llm_kv(kid), result, required);
+    }
+
+    template<typename T>
+    bool get_key(const std::string & key, T & result, const bool required = true) {
+        auto it = kv_overrides.find(key);
+
+        const struct llama_model_kv_override * override =
+            it != kv_overrides.end() ? &it->second : nullptr;
+
+        const bool found = GGUFMeta::GKV<T>::set(ctx_gguf, key, result, override);
+
+        if (required && !found) {
+            throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+        }
+
+        return found;
+    }
+
+    template<typename T>
+    bool get_key(const enum llm_kv kid, T & result, const bool required = true) {
+        return get_key(llm_kv(kid), result, required);
+    }
+
     std::string get_arch_name() const {
-        const auto kv = LLM_KV(LLM_ARCH_UNKNOWN);
-
-        std::string arch_name;
-        GGUF_GET_KEY(ctx_gguf, arch_name, gguf_get_val_str, GGUF_TYPE_STRING, false, kv(LLM_KV_GENERAL_ARCHITECTURE));
-
         return arch_name;
     }
 
     enum llm_arch get_arch() const {
-        const std::string arch_name = get_arch_name();
-
-        return llm_arch_from_string(arch_name);
+        return llm_kv.arch;
     }
 
     const char * get_tensor_name(int i) const {
@@ -1993,10 +2221,13 @@ struct llama_model_loader {
         return tensor;
     }
 
-    struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, ggml_backend_type backend) {
+    struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, ggml_backend_type backend, bool required = true) {
         struct ggml_tensor * cur = ggml_get_tensor(ctx_meta, name.c_str());
 
         if (cur == NULL) {
+            if (!required) {
+                return NULL;
+            }
             throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name.c_str()));
         }
 
@@ -2200,11 +2431,8 @@ static void llm_load_arch(llama_model_loader & ml, llama_model & model) {
 static void llm_load_hparams(
         llama_model_loader & ml,
         llama_model & model) {
-    struct gguf_context * ctx = ml.ctx_gguf;
-
-    const auto kv = LLM_KV(model.arch);
-
     auto & hparams = model.hparams;
+    const gguf_context * ctx = ml.ctx_gguf;
 
     // get metadata as string
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {
@@ -2218,42 +2446,41 @@ static void llm_load_hparams(
     }
 
     // get general kv
-    GGUF_GET_KEY(ctx, model.name, gguf_get_val_str, GGUF_TYPE_STRING, false, kv(LLM_KV_GENERAL_NAME));
+    ml.get_key(LLM_KV_GENERAL_NAME, model.name, false);
 
     // get hparams kv
-    GGUF_GET_KEY(ctx, hparams.n_vocab,        gguf_get_arr_n,   GGUF_TYPE_ARRAY,  true, kv(LLM_KV_TOKENIZER_LIST));
-    GGUF_GET_KEY(ctx, hparams.n_ctx_train,    gguf_get_val_u32, GGUF_TYPE_UINT32, true, kv(LLM_KV_CONTEXT_LENGTH));
-    GGUF_GET_KEY(ctx, hparams.n_embd,         gguf_get_val_u32, GGUF_TYPE_UINT32, true, kv(LLM_KV_EMBEDDING_LENGTH));
-    GGUF_GET_KEY(ctx, hparams.n_ff,           gguf_get_val_u32, GGUF_TYPE_UINT32, true, kv(LLM_KV_FEED_FORWARD_LENGTH));
-    GGUF_GET_KEY(ctx, hparams.n_head,         gguf_get_val_u32, GGUF_TYPE_UINT32, true, kv(LLM_KV_ATTENTION_HEAD_COUNT));
-    GGUF_GET_KEY(ctx, hparams.n_layer,        gguf_get_val_u32, GGUF_TYPE_UINT32, true, kv(LLM_KV_BLOCK_COUNT));
+    ml.get_arr_n(LLM_KV_TOKENIZER_LIST,       hparams.n_vocab);
+    ml.get_key  (LLM_KV_CONTEXT_LENGTH,       hparams.n_ctx_train);
+    ml.get_key  (LLM_KV_EMBEDDING_LENGTH,     hparams.n_embd);
+    ml.get_key  (LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff);
+    ml.get_key  (LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head);
+    ml.get_key  (LLM_KV_BLOCK_COUNT,          hparams.n_layer);
 
     // n_head_kv is optional, default to n_head
     hparams.n_head_kv = hparams.n_head;
-    GGUF_GET_KEY(ctx, hparams.n_head_kv, gguf_get_val_u32, GGUF_TYPE_UINT32, false, kv(LLM_KV_ATTENTION_HEAD_COUNT_KV));
+    ml.get_key(LLM_KV_ATTENTION_HEAD_COUNT_KV, hparams.n_head_kv, false);
 
-    hparams.rope_finetuned = false;
-    GGUF_GET_KEY(ctx, hparams.rope_finetuned, gguf_get_val_bool, GGUF_TYPE_BOOL, false,
-                 kv(LLM_KV_ROPE_SCALING_FINETUNED));
+    bool rope_finetuned = false;
+    ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
+    hparams.rope_finetuned = rope_finetuned;
 
     hparams.n_yarn_orig_ctx = hparams.n_ctx_train;
-    GGUF_GET_KEY(ctx, hparams.n_yarn_orig_ctx, gguf_get_val_u32, GGUF_TYPE_UINT32, false,
-                 kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN));
+    ml.get_key(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN, hparams.n_yarn_orig_ctx, false);
 
     // rope_freq_base (optional)
     hparams.rope_freq_base_train = 10000.0f;
-    GGUF_GET_KEY(ctx, hparams.rope_freq_base_train, gguf_get_val_f32, GGUF_TYPE_FLOAT32, false, kv(LLM_KV_ROPE_FREQ_BASE));
+    ml.get_key(LLM_KV_ROPE_FREQ_BASE, hparams.rope_freq_base_train, false);
 
     std::string rope_scaling("linear");
-    GGUF_GET_KEY(ctx, rope_scaling, gguf_get_val_str, GGUF_TYPE_STRING, false, kv(LLM_KV_ROPE_SCALING_TYPE));
+    ml.get_key(LLM_KV_ROPE_SCALING_TYPE, rope_scaling, false);
     hparams.rope_scaling_type_train = llama_rope_scaling_type_from_string(rope_scaling);
     GGML_ASSERT(hparams.rope_scaling_type_train != LLAMA_ROPE_SCALING_UNSPECIFIED);
 
     // rope_freq_scale (inverse of the kv) is optional
     float ropescale = 0.0f;
-    GGUF_GET_KEY(ctx, ropescale, gguf_get_val_f32, GGUF_TYPE_FLOAT32, false, kv(LLM_KV_ROPE_SCALING_FACTOR));
-    if (ropescale == 0.0f) { // try the old key name
-        GGUF_GET_KEY(ctx, ropescale, gguf_get_val_f32, GGUF_TYPE_FLOAT32, false, kv(LLM_KV_ROPE_SCALE_LINEAR));
+    if (!ml.get_key(LLM_KV_ROPE_SCALING_FACTOR, ropescale, false)) {
+        // try the old key name
+        ml.get_key(LLM_KV_ROPE_SCALE_LINEAR, ropescale, false);
     }
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
@@ -2261,7 +2488,7 @@ static void llm_load_hparams(
     {
         hparams.n_rot = hparams.n_embd / hparams.n_head;
 
-        GGUF_GET_KEY(ctx, hparams.n_rot, gguf_get_val_u32, GGUF_TYPE_UINT32, false, kv(LLM_KV_ROPE_DIMENSION_COUNT));
+        ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT, hparams.n_rot, false);
 
         if (model.arch == LLM_ARCH_LLAMA || model.arch == LLM_ARCH_FALCON) {
             if (hparams.n_rot != hparams.n_embd / hparams.n_head) {
@@ -2276,7 +2503,7 @@ static void llm_load_hparams(
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_rms_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_3B; break;
@@ -2290,7 +2517,7 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_FALCON:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_7B; break;
@@ -2300,7 +2527,7 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_BAICHUAN:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_rms_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_7B; break;
                     case 40: model.type = e_model::MODEL_13B; break;
@@ -2309,7 +2536,7 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_STARCODER:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
                 switch (hparams.n_layer) {
                     case 24: model.type = e_model::MODEL_1B; break;
                     case 36: model.type = e_model::MODEL_3B; break;
@@ -2320,7 +2547,7 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_PERSIMMON:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
                 switch (hparams.n_layer) {
                     case 36: model.type = e_model::MODEL_8B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
@@ -2328,7 +2555,7 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_REFACT:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_rms_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_1B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
@@ -2336,7 +2563,7 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_BLOOM:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 
                 switch (hparams.n_layer) {
                     case 24: model.type = e_model::MODEL_1B; break;
@@ -2351,9 +2578,9 @@ static void llm_load_hparams(
             {
                 hparams.f_clamp_kqv = 0.0f;
 
-                GGUF_GET_KEY(ctx, hparams.f_norm_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_EPS));
-                GGUF_GET_KEY(ctx, hparams.f_clamp_kqv, gguf_get_val_f32, GGUF_TYPE_FLOAT32, false, kv(LLM_KV_ATTENTION_CLAMP_KQV));
-                GGUF_GET_KEY(ctx, hparams.f_max_alibi_bias, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,  hparams.f_norm_eps);
+                ml.get_key(LLM_KV_ATTENTION_CLAMP_KQV,      hparams.f_clamp_kqv, false);
+                ml.get_key(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, hparams.f_max_alibi_bias);
 
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_7B; break;
@@ -2363,12 +2590,22 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_STABLELM:
             {
-                GGUF_GET_KEY(ctx, hparams.f_norm_eps, gguf_get_val_f32, GGUF_TYPE_FLOAT32, true, kv(LLM_KV_ATTENTION_LAYERNORM_EPS));
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_3B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                }
+            } break;
+        case LLM_ARCH_QWEN:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                switch (hparams.n_layer) {
+                    case 32: model.type = e_model::MODEL_7B; break;
+                    case 40: model.type = e_model::MODEL_13B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
             } break;
 
         default: (void)0;
@@ -2411,7 +2648,7 @@ static void llm_load_vocab(
     {
         std::string tokenizer_name;
 
-        GGUF_GET_KEY(ctx, tokenizer_name, gguf_get_val_str, GGUF_TYPE_STRING, true, kv(LLM_KV_TOKENIZER_MODEL));
+        ml.get_key(LLM_KV_TOKENIZER_MODEL, tokenizer_name);
 
         if (tokenizer_name == "llama") {
             vocab.type = LLAMA_VOCAB_TYPE_SPM;
@@ -2501,34 +2738,31 @@ static void llm_load_vocab(
         };
         for (const auto & it : special_token_types) {
             const std::string & key = kv(std::get<0>(it));
-            int32_t & id = std::get<1>(it), old_id = id;
+            int32_t & id = std::get<1>(it);
 
-            GGUF_GET_KEY(ctx, id, gguf_get_val_u32, GGUF_TYPE_UINT32, false, key);
-            // Must be >= -1 and < vocab size. Since the key is unsigned, -1
-            // can only come from the default value, so there's no point in
-            // validating that.
-            if (size_t(id + 1) > vocab.id_to_token.size()) {
-                LLAMA_LOG_WARN("%s: bad special token: '%s' = %d, using default id %d\n",
-                    __func__, key.c_str(), id, old_id);
-                id = old_id;
+            uint32_t new_id;
+            if (!ml.get_key(std::get<0>(it), new_id, false)) {
+                continue;
+            }
+            if (new_id >= vocab.id_to_token.size()) {
+                LLAMA_LOG_WARN("%s: bad special token: '%s' = %ud, using default id %d\n",
+                    __func__, key.c_str(), new_id, id);
+            } else {
+                id = new_id;
             }
 
         }
 
         // Handle add_bos_token and add_eos_token
-        std::string key = kv(LLM_KV_TOKENIZER_ADD_BOS);
-        int kid = gguf_find_key(ctx, key.c_str());
-        enum gguf_type ktype = kid < 0 ? GGUF_TYPE_COUNT : gguf_get_kv_type(ctx, kid);
-        vocab.special_add_bos = ktype == GGUF_TYPE_BOOL ? gguf_get_val_bool(ctx, kid) : -1;
-        if (ktype != GGUF_TYPE_BOOL && ktype != GGUF_TYPE_COUNT) {
-            LLAMA_LOG_WARN("%s: bad field type %d for '%s' - ignoring\n", __func__, ktype, key.c_str());
-        }
-        key = kv(LLM_KV_TOKENIZER_ADD_EOS);
-        kid = gguf_find_key(ctx, key.c_str());
-        ktype = kid < 0 ? GGUF_TYPE_COUNT : gguf_get_kv_type(ctx, kid);
-        vocab.special_add_eos = ktype == GGUF_TYPE_BOOL ? gguf_get_val_bool(ctx, kid) : -1;
-        if (ktype != GGUF_TYPE_BOOL && ktype != GGUF_TYPE_COUNT) {
-            LLAMA_LOG_WARN("%s: bad field type %d for '%s' - ignoring\n", __func__, ktype, key.c_str());
+        {
+            bool temp = true;
+
+            if (ml.get_key(LLM_KV_TOKENIZER_ADD_BOS, temp, false)) {
+                vocab.special_add_bos = int(temp);
+            }
+            if (ml.get_key(LLM_KV_TOKENIZER_ADD_EOS, temp, false)) {
+                vocab.special_add_eos = int(temp);
+            }
         }
     }
 
@@ -2667,15 +2901,15 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     }
 
     // general kv
-    LLAMA_LOG_INFO("%s: general.name   = %s\n",    __func__, model.name.c_str());
+    LLAMA_LOG_INFO("%s: general.name     = %s\n",    __func__, model.name.c_str());
 
     // special tokens
-    if (vocab.special_bos_id != -1) { LLAMA_LOG_INFO( "%s: BOS token = %d '%s'\n", __func__, vocab.special_bos_id, vocab.id_to_token[vocab.special_bos_id].text.c_str() ); }
-    if (vocab.special_eos_id != -1) { LLAMA_LOG_INFO( "%s: EOS token = %d '%s'\n", __func__, vocab.special_eos_id, vocab.id_to_token[vocab.special_eos_id].text.c_str() ); }
-    if (vocab.special_unk_id != -1) { LLAMA_LOG_INFO( "%s: UNK token = %d '%s'\n", __func__, vocab.special_unk_id, vocab.id_to_token[vocab.special_unk_id].text.c_str() ); }
-    if (vocab.special_sep_id != -1) { LLAMA_LOG_INFO( "%s: SEP token = %d '%s'\n", __func__, vocab.special_sep_id, vocab.id_to_token[vocab.special_sep_id].text.c_str() ); }
-    if (vocab.special_pad_id != -1) { LLAMA_LOG_INFO( "%s: PAD token = %d '%s'\n", __func__, vocab.special_pad_id, vocab.id_to_token[vocab.special_pad_id].text.c_str() ); }
-    if (vocab.linefeed_id    != -1) { LLAMA_LOG_INFO( "%s: LF token  = %d '%s'\n", __func__, vocab.linefeed_id,    vocab.id_to_token[vocab.linefeed_id].text.c_str() );    }
+    if (vocab.special_bos_id != -1) { LLAMA_LOG_INFO( "%s: BOS token        = %d '%s'\n", __func__, vocab.special_bos_id, vocab.id_to_token[vocab.special_bos_id].text.c_str() ); }
+    if (vocab.special_eos_id != -1) { LLAMA_LOG_INFO( "%s: EOS token        = %d '%s'\n", __func__, vocab.special_eos_id, vocab.id_to_token[vocab.special_eos_id].text.c_str() ); }
+    if (vocab.special_unk_id != -1) { LLAMA_LOG_INFO( "%s: UNK token        = %d '%s'\n", __func__, vocab.special_unk_id, vocab.id_to_token[vocab.special_unk_id].text.c_str() ); }
+    if (vocab.special_sep_id != -1) { LLAMA_LOG_INFO( "%s: SEP token        = %d '%s'\n", __func__, vocab.special_sep_id, vocab.id_to_token[vocab.special_sep_id].text.c_str() ); }
+    if (vocab.special_pad_id != -1) { LLAMA_LOG_INFO( "%s: PAD token        = %d '%s'\n", __func__, vocab.special_pad_id, vocab.id_to_token[vocab.special_pad_id].text.c_str() ); }
+    if (vocab.linefeed_id    != -1) { LLAMA_LOG_INFO( "%s: LF token         = %d '%s'\n", __func__, vocab.linefeed_id,    vocab.id_to_token[vocab.linefeed_id].text.c_str() );    }
 }
 
 static void llm_load_tensors(
@@ -2805,6 +3039,12 @@ static void llm_load_tensors(
                         layer.wv = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, backend_split);
                         layer.wo = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd},     backend_split);
 
+                        // optional bias tensors
+                        layer.bq = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd},     backend, false);
+                        layer.bk = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, backend, false);
+                        layer.bv = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, backend, false);
+                        layer.bo = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     backend, false);
+
                         layer.ffn_norm = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, backend);
 
                         layer.ffn_gate = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, backend_split);
@@ -2813,9 +3053,14 @@ static void llm_load_tensors(
 
                         if (backend == GGML_BACKEND_GPU) {
                             vram_weights +=
-                                ggml_nbytes(layer.attn_norm) + ggml_nbytes(layer.wq)       + ggml_nbytes(layer.wk)       +
-                                ggml_nbytes(layer.wv)        + ggml_nbytes(layer.wo)       + ggml_nbytes(layer.ffn_norm) +
-                                ggml_nbytes(layer.ffn_gate)  + ggml_nbytes(layer.ffn_down) + ggml_nbytes(layer.ffn_up);
+                                ggml_nbytes(layer.attn_norm) + ggml_nbytes(layer.wq) + ggml_nbytes(layer.wk) +
+                                ggml_nbytes(layer.wv) + ggml_nbytes(layer.wo) +
+                                (layer.bq ? ggml_nbytes(layer.bq) : 0) +
+                                (layer.bk ? ggml_nbytes(layer.bk) : 0) +
+                                (layer.bv ? ggml_nbytes(layer.bv) : 0) +
+                                (layer.bo ? ggml_nbytes(layer.bo) : 0) +
+                                ggml_nbytes(layer.ffn_norm) + ggml_nbytes(layer.ffn_gate) +
+                                ggml_nbytes(layer.ffn_down) + ggml_nbytes(layer.ffn_up);
                         }
                     }
                 } break;
@@ -3333,6 +3578,71 @@ static void llm_load_tensors(
                         }
                     }
                 } break;
+            case LLM_ARCH_QWEN:
+                {
+                    model.tok_embd = ml.create_tensor(ctx, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, GGML_BACKEND_CPU);
+                    {
+                        ggml_backend_type backend_norm;
+                        ggml_backend_type backend_output;
+
+                        if (n_gpu_layers > int(n_layer)) {
+                            // norm is not performance relevant on its own but keeping it in VRAM reduces data copying
+                            // on Windows however this is detrimental unless everything is on the GPU
+#ifndef _WIN32
+                            backend_norm = llama_backend_offload;
+#else
+                            backend_norm = n_gpu_layers <= (int) n_layer + 2 ? GGML_BACKEND_CPU : llama_backend_offload;
+#endif // _WIN32
+
+                            backend_output = llama_backend_offload_split;
+                        } else {
+                            backend_norm   = GGML_BACKEND_CPU;
+                            backend_output = GGML_BACKEND_CPU;
+                        }
+
+                        model.output_norm = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},          backend_norm);
+                        model.output      = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, backend_output);
+
+                        if (backend_norm == GGML_BACKEND_GPU) {
+                            vram_weights += ggml_nbytes(model.output_norm);
+                        }
+                        if (backend_output == GGML_BACKEND_GPU_SPLIT) {
+                            vram_weights += ggml_nbytes(model.output);
+                        }
+                    }
+
+                    const uint32_t n_ff = hparams.n_ff / 2;
+
+                    const int i_gpu_start = n_layer - n_gpu_layers;
+
+                    model.layers.resize(n_layer);
+
+                    for (uint32_t i = 0; i < n_layer; ++i) {
+                        const ggml_backend_type backend = int(i) < i_gpu_start ? GGML_BACKEND_CPU : llama_backend_offload; // NOLINT
+                        const ggml_backend_type backend_split = int(i) < i_gpu_start ? GGML_BACKEND_CPU : llama_backend_offload_split; // NOLINT
+
+                        auto & layer = model.layers[i];
+
+                        layer.attn_norm = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, backend);
+
+                        layer.wqkv = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd * 3}, backend_split);
+                        layer.bqkv = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias", i),   {n_embd * 3},         backend);
+                        layer.wo   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd},     backend_split);
+
+                        layer.ffn_norm = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, backend);
+
+                        layer.ffn_gate = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, backend_split);
+                        layer.ffn_down = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, backend_split);
+                        layer.ffn_up   = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, backend_split);
+
+                        if (backend == GGML_BACKEND_GPU) {
+                            vram_weights +=
+                                ggml_nbytes(layer.attn_norm) + ggml_nbytes(layer.wqkv)     + ggml_nbytes(layer.bqkv)     +
+                                ggml_nbytes(layer.wo)        + ggml_nbytes(layer.ffn_norm) + ggml_nbytes(layer.ffn_gate) +
+                                ggml_nbytes(layer.ffn_down)  + ggml_nbytes(layer.ffn_up);
+                        }
+                    }
+                } break;
 
             default:
                 throw std::runtime_error("unknown architecture");
@@ -3401,7 +3711,7 @@ static void llm_load_tensors(
 
 static bool llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
-        llama_model_loader ml(fname, params.use_mmap);
+        llama_model_loader ml(fname, params.use_mmap, params.kv_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -3481,8 +3791,7 @@ static struct ggml_tensor * llm_build_inp_embd(
         const llama_hparams & hparams,
           const llama_batch & batch,
          struct ggml_tensor * tok_embd,
-         const llm_build_cb & cb,
-        struct ggml_tensor ** to_device_tensor = nullptr) {
+         const llm_build_cb & cb) {
     const int64_t n_embd = hparams.n_embd;
 
     struct ggml_tensor * inpL;
@@ -3490,9 +3799,6 @@ static struct ggml_tensor * llm_build_inp_embd(
     if (batch.token) {
         struct ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, batch.n_tokens);
         cb(inp_tokens, "inp_tokens", -1);
-        if (to_device_tensor) {
-            *to_device_tensor = inp_tokens;
-        }
 
         inpL = ggml_get_rows(ctx, tok_embd, inp_tokens);
     } else {
@@ -3501,9 +3807,6 @@ static struct ggml_tensor * llm_build_inp_embd(
 #endif
 
         inpL = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
-        if (to_device_tensor) {
-            *to_device_tensor = inpL;
-        }
     }
 
     return inpL;
@@ -3511,7 +3814,7 @@ static struct ggml_tensor * llm_build_inp_embd(
 
 // Persimmon: n_rot = n_embd_head/2
 // Other:     n_rot = n_embd_head
-static struct ggml_tensor * llm_build_k_shift(
+static void llm_build_k_shift(
       struct ggml_context * ctx,
       const llama_hparams & hparams,
       const llama_cparams & cparams,
@@ -3519,7 +3822,7 @@ static struct ggml_tensor * llm_build_k_shift(
        struct ggml_cgraph * graph,
             llm_rope_type   type,
                   int64_t   n_ctx,
-                  int64_t   n_rot,
+                  int       n_rot,
                   float     freq_base,
                   float     freq_scale,
        const llm_build_cb & cb) {
@@ -3551,7 +3854,7 @@ static struct ggml_tensor * llm_build_k_shift(
             // we rotate only the first n_rot dimensions
             ggml_rope_custom_inplace(ctx,
                     ggml_view_3d(ctx, kv.k,
-                        n_rot, n_head_kv, n_ctx,
+                        n_embd_head, n_head_kv, n_ctx,
                         ggml_element_size(kv.k)*n_embd_head,
                         ggml_element_size(kv.k)*n_embd_gqa,
                         ggml_element_size(kv.k)*n_embd_gqa*n_ctx*il),
@@ -3560,8 +3863,6 @@ static struct ggml_tensor * llm_build_k_shift(
         cb(tmp, "K_shifted", il);
         ggml_build_forward_expand(graph, tmp);
     }
-
-    return K_shift;
 }
 
 static void llm_build_kv_store(
@@ -3751,22 +4052,28 @@ static struct ggml_tensor * llm_build_kqv(
     struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
     cb(kq, "kq", il);
 
-    kq = ggml_scale(ctx, kq, kq_scale);
-    cb(kq, "kq_scaled", il);
-
     if (max_alibi_bias > 0.0f) {
-        // TODO: n_head or n_head_kv
-        // TODO: K-shift is likely not working
-        // TODO: change to ggml_add
-        kq = ggml_alibi(ctx, kq, /*n_past*/ 0, n_head, max_alibi_bias);
-        cb(kq, "kq_scaled_alibi", il);
+        // temporary branch until we figure out how to handle ggml_alibi through ggml_add
+        kq = ggml_scale(ctx, kq, kq_scale);
+        cb(kq, "kq_scaled", il);
+
+        if (max_alibi_bias > 0.0f) {
+            // TODO: n_head or n_head_kv
+            // TODO: K-shift is likely not working
+            // TODO: change to ggml_add
+            kq = ggml_alibi(ctx, kq, /*n_past*/ 0, n_head, max_alibi_bias);
+            cb(kq, "kq_scaled_alibi", il);
+        }
+
+        kq = ggml_add(ctx, kq, kq_mask);
+        cb(kq, "kq_masked", il);
+
+        kq = ggml_soft_max(ctx, kq);
+        cb(kq, "kq_soft_max", il);
+    } else {
+        kq = ggml_soft_max_ext(ctx, kq, kq_mask, 1.0f/sqrtf(float(n_embd_head)));
+        cb(kq, "kq_soft_max_ext", il);
     }
-
-    kq = ggml_add(ctx, kq, kq_mask);
-    cb(kq, "kq_masked", il);
-
-    kq = ggml_soft_max(ctx, kq);
-    cb(kq, "kq_soft_max", il);
 
     // split cached v into n_head heads
     struct ggml_tensor * v =
@@ -3833,7 +4140,7 @@ struct llm_build_context {
 
     llama_buffer & buf_compute;
 
-#if defined(GGML_USE_KOMPUTE)
+#ifdef GGML_USE_KOMPUTE
     ggml_kompute_context * ctx_kompute;
 #endif
 
@@ -3872,7 +4179,7 @@ struct llm_build_context {
         do_rope_shift (worst_case || kv_self.has_shift),
         cb            (cb),
         buf_compute   (lctx.buf_compute)
-#if defined(GGML_USE_KOMPUTE)
+#ifdef GGML_USE_KOMPUTE
       , ctx_kompute   (lctx.ctx_kompute)
 #endif
         {
@@ -3905,9 +4212,8 @@ struct llm_build_context {
 
         struct ggml_tensor * cur;
         struct ggml_tensor * inpL;
-        struct ggml_tensor * to_device_tensor = nullptr;
 
-        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb, &to_device_tensor);
+        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb);
         cb(inpL, "inp_embd", -1);
 
         // inp_pos - contains the positions
@@ -3923,9 +4229,8 @@ struct llm_build_context {
         cb(KQ_mask, "KQ_mask", -1);
 
         // shift the entire K-cache if needed
-        struct ggml_tensor * K_shift = nullptr;
         if (do_rope_shift) {
-            K_shift = llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE, n_ctx, n_embd_head, freq_base, freq_scale, cb);
+            llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE, n_ctx, n_embd_head, freq_base, freq_scale, cb);
         }
 
         for (int il = 0; il < n_layer; ++il) {
@@ -3942,12 +4247,24 @@ struct llm_build_context {
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
+                if (model.layers[il].bq) {
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    cb(Qcur, "Qcur", il);
+                }
 
                 struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
                 cb(Kcur, "Kcur", il);
+                if (model.layers[il].bk) {
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    cb(Kcur, "Kcur", il);
+                }
 
                 struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
                 cb(Vcur, "Vcur", il);
+                if (model.layers[il].bv) {
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    cb(Vcur, "Vcur", il);
+                }
 
                 Qcur = ggml_rope_custom(
                     ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens), inp_pos,
@@ -3966,7 +4283,7 @@ struct llm_build_context {
                 llm_build_kv_store(ctx0, hparams, kv_self, gf, Kcur, Vcur, n_ctx, n_tokens, kv_head, cb, il);
 
                 cur = llm_build_kqv(ctx0, hparams, kv_self,
-                        model.layers[il].wo, NULL,
+                        model.layers[il].wo, model.layers[il].bo,
                         Qcur, KQ_scale, KQ_mask, n_ctx, n_tokens, n_kv, -1.0f, cb, il);
                 cb(cur, "kqv_out", il);
             }
@@ -4008,21 +4325,6 @@ struct llm_build_context {
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);
-
-#if defined(GGML_USE_KOMPUTE)
-        if (ctx_kompute) {
-            if (!ggml_vk_has_h2d_all(ctx_kompute)) {
-                ggml_vk_h2d_all(ctx_kompute);
-            } else {
-                ggml_vk_h2d_tensor(ctx_kompute, to_device_tensor);
-                ggml_vk_h2d_tensor(ctx_kompute, inp_pos);
-                ggml_vk_h2d_tensor(ctx_kompute, KQ_mask);
-                if (K_shift) {
-                    ggml_vk_h2d_tensor(ctx_kompute, K_shift);
-                }
-            }
-        }
-#endif
 
         return gf;
     }
@@ -4152,9 +4454,8 @@ struct llm_build_context {
 
         struct ggml_tensor * cur;
         struct ggml_tensor * inpL;
-        struct ggml_tensor * to_device_tensor = nullptr;
 
-        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb, &to_device_tensor);
+        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb);
         cb(inpL, "inp_embd", -1);
 
         // inp_pos - contains the positions
@@ -4170,9 +4471,8 @@ struct llm_build_context {
         cb(KQ_mask, "KQ_mask", -1);
 
         // shift the entire K-cache if needed
-        struct ggml_tensor * K_shift = nullptr;
         if (do_rope_shift) {
-            K_shift = llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE_NEOX, n_ctx, n_embd_head, freq_base, freq_scale, cb);
+            llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE_NEOX, n_ctx, n_embd_head, freq_base, freq_scale, cb);
         }
 
         for (int il = 0; il < n_layer; ++il) {
@@ -4267,21 +4567,6 @@ struct llm_build_context {
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);
-
-#if defined(GGML_USE_KOMPUTE)
-        if (ctx_kompute) {
-            if (!ggml_vk_has_h2d_all(ctx_kompute)) {
-                ggml_vk_h2d_all(ctx_kompute);
-            } else {
-                ggml_vk_h2d_tensor(ctx_kompute, to_device_tensor);
-                ggml_vk_h2d_tensor(ctx_kompute, inp_pos);
-                ggml_vk_h2d_tensor(ctx_kompute, KQ_mask);
-                if (K_shift) {
-                    ggml_vk_h2d_tensor(ctx_kompute, K_shift);
-                }
-            }
-        }
-#endif
 
         return gf;
     }
@@ -4991,6 +5276,121 @@ struct llm_build_context {
 
         return gf;
     }
+
+    struct ggml_cgraph * build_qwen() {
+        struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, LLAMA_MAX_NODES, false);
+
+        struct ggml_tensor * cur;
+        struct ggml_tensor * inpL;
+
+        inpL = llm_build_inp_embd(ctx0, hparams, batch, model.tok_embd, cb);
+        cb(inpL, "inp_embd", -1);
+
+        // inp_pos - contains the positions
+        struct ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+        cb(inp_pos, "inp_pos", -1);
+
+        // KQ_scale
+        struct ggml_tensor * KQ_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+        cb(KQ_scale, "KQ_scale", -1);
+
+        // KQ_mask (mask for 1 head, it wil be broadcasted to all heads)
+        struct ggml_tensor * KQ_mask = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_kv, n_tokens, 1);
+        cb(KQ_mask, "KQ_mask", -1);
+
+        // shift the entire K-cache if needed
+        if (do_rope_shift) {
+            llm_build_k_shift(ctx0, hparams, cparams, kv_self, gf, LLM_ROPE_NEOX, n_ctx, n_embd_head, freq_base, freq_scale, cb);
+        }
+
+        for (int il = 0; il < n_layer; ++il) {
+            struct ggml_tensor * inpSA = inpL;
+
+            cur = llm_build_norm(ctx0, inpL, hparams,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, cb, il);
+            cb(cur, "attn_norm", il);
+
+            // self-attention
+            {
+                cur = ggml_mul_mat(ctx0, model.layers[il].wqkv, cur);
+                cb(cur, "wqkv", il);
+
+                cur = ggml_add(ctx0, cur, model.layers[il].bqkv);
+                cb(cur, "bqkv", il);
+
+                struct ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 0*sizeof(float)*(n_embd)));
+                struct ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd)));
+                struct ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_tokens, cur->nb[1], 2*sizeof(float)*(n_embd)));
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+
+                // using mode = 2 for neox mode
+                Qcur = ggml_rope_custom(
+                    ctx0, Qcur, inp_pos, n_embd_head, 2, 0, n_orig_ctx,
+                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow
+                );
+                cb(Qcur, "Qcur", il);
+
+                Kcur = ggml_rope_custom(
+                    ctx0, Kcur, inp_pos, n_embd_head, 2, 0, n_orig_ctx,
+                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow
+                );
+                cb(Kcur, "Kcur", il);
+
+                llm_build_kv_store(ctx0, hparams, kv_self, gf, Kcur, Vcur, n_ctx, n_tokens, kv_head, cb, il);
+
+                cur = llm_build_kqv(ctx0, hparams, kv_self,
+                        model.layers[il].wo, NULL,
+                        Qcur, KQ_scale, KQ_mask, n_ctx, n_tokens, n_kv, -1.0f, cb, il);
+                cb(cur, "kqv_out", il);
+            }
+
+            struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // feed-forward forward
+            {
+                cur = llm_build_norm(ctx0, ffn_inp, hparams,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, cb, il);
+                cb(cur, "ffn_norm", il);
+
+                cur = llm_build_ffn(ctx0, cur,
+                        model.layers[il].ffn_up,   NULL,
+                        model.layers[il].ffn_gate, NULL,
+                        model.layers[il].ffn_down, NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                cb(cur, "ffn_out", il);
+            }
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = llm_build_norm(ctx0, cur, hparams,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, cb, -1);
+        cb(cur, "result_norm", -1);
+
+        // lm_head
+        cur = ggml_mul_mat(ctx0, model.output, cur);
+        cb(cur, "result_output", -1);
+
+        ggml_build_forward_expand(gf, cur);
+
+        return gf;
+    }
 };
 
 //
@@ -5130,6 +5530,7 @@ static const std::unordered_map<const char *, llm_offload_func_e> k_offload_map 
     { "kq_scaled_alibi",            OFFLOAD_FUNC_KQ  },
     { "kq_masked",                  OFFLOAD_FUNC_KQ  },
     { "kq_soft_max",                OFFLOAD_FUNC_V   },
+    { "kq_soft_max_ext",            OFFLOAD_FUNC_V   },
     { "v",                          OFFLOAD_FUNC_V   },
     { "kqv",                        OFFLOAD_FUNC_V   },
     { "kqv_merged",                 OFFLOAD_FUNC_V   },
@@ -5182,6 +5583,10 @@ static struct ggml_cgraph * llama_build_graph(
     const bool do_offload = true;
 #else
     const bool do_offload = true; // TODO: set to false after finishing refactoring
+#endif
+
+#ifdef GGML_USE_KOMPUTE
+    const bool needs_h2d_all = lctx.ctx_kompute && !ggml_vk_has_h2d_all(lctx.ctx_kompute);
 #endif
 
     int n_non_view = 0; // number of non-view tensors that have been processed by the callback
@@ -5303,6 +5708,21 @@ static struct ggml_cgraph * llama_build_graph(
         if (cur->op != GGML_OP_NONE) {
             n_non_view++;
         }
+
+#ifdef GGML_USE_KOMPUTE
+        if (lctx.ctx_kompute && !needs_h2d_all) {
+            const char * offload_tensors[] = {"inp_tokens", "inp_pos", "KQ_mask", "K_shift"};
+            for (auto off : offload_tensors) {
+                if (strcmp(name, off) == 0) {
+                    ggml_vk_h2d_tensor(lctx.ctx_kompute, cur);
+                    break;
+                }
+            }
+            if (strcmp(name, "inp_embd") == 0 && !batch.token) {
+                ggml_vk_h2d_tensor(lctx.ctx_kompute, cur);
+            }
+        }
+#endif
 
         //
         // offload layers
@@ -5464,9 +5884,19 @@ static struct ggml_cgraph * llama_build_graph(
             {
                 result = llm.build_stablelm();
             } break;
+        case LLM_ARCH_QWEN:
+            {
+                result = llm.build_qwen();
+            } break;
         default:
             GGML_ASSERT(false);
     }
+
+#ifdef GGML_USE_KOMPUTE
+        if (needs_h2d_all) {
+            ggml_vk_h2d_all(lctx.ctx_kompute);
+        }
+#endif
 
     llm.free();
 
@@ -5586,8 +6016,7 @@ static int llama_decode_internal(
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // after enough generations, the benefit from this heuristic disappears
     // if we start defragmenting the cache, the benefit from this will be more important
-    //kv_self.n = std::max(32, GGML_PAD(llama_kv_cache_cell_max(kv_self), 32));   // TODO: this might be better for CUDA?
-    kv_self.n = std::min((int32_t) cparams.n_ctx, std::max(32, llama_kv_cache_cell_max(kv_self)));
+    kv_self.n = std::min((int32_t) cparams.n_ctx, std::max(32, GGML_PAD(llama_kv_cache_cell_max(kv_self), 32)));
 
     //printf("kv_self.n = %5d, kv_self.used = %5d, kv_self.head = %5d\n", kv_self.n, kv_self.used, kv_self.head);
 
@@ -5638,18 +6067,8 @@ static int llama_decode_internal(
         n_threads = std::min(4, n_threads);
     }
 
-    // If all tensors can be run on the GPU then using more than 1 thread is detrimental.
-    const bool full_offload_supported =
-        model.arch == LLM_ARCH_LLAMA      ||
-        model.arch == LLM_ARCH_BAICHUAN   ||
-        model.arch == LLM_ARCH_FALCON     ||
-        model.arch == LLM_ARCH_REFACT     ||
-        model.arch == LLM_ARCH_MPT        ||
-        model.arch == LLM_ARCH_STARCODER  ||
-        model.arch == LLM_ARCH_STABLELM;
-
     const bool fully_offloaded = model.n_gpu_layers >= (int) hparams.n_layer + 3;
-    if (ggml_cpu_has_cublas() && full_offload_supported && fully_offloaded) {
+    if (ggml_cpu_has_cublas() && fully_offloaded) {
         n_threads = 1;
     }
 
@@ -5739,7 +6158,6 @@ static int llama_decode_internal(
         }
     }
 
-#if 0
     // extract embeddings
     if (!lctx.embedding.empty()) {
         auto & embedding_out = lctx.embedding;
@@ -5747,7 +6165,6 @@ static int llama_decode_internal(
         embedding_out.resize(n_embd);
         memcpy(embedding_out.data(), (float *) ggml_get_data(embeddings) + (n_embd*(n_tokens - 1)), sizeof(float)*n_embd);
     }
-#endif
 
     // measure the performance only for the single-token evals
     if (n_tokens == 1) {
@@ -6524,11 +6941,13 @@ struct llama_grammar_candidate {
 // Decodes a UTF-8 string which may end in an incomplete sequence. Adds a terminating 0 for use as
 // pointer. If an invalid sequence is encountered, returns `llama_partial_utf8.n_remain == -1`.
 static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
-        const char         * src,
+        const std::string & src,
         llama_partial_utf8   partial_start) {
     static const int      lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4 };
-    const char          * pos      = src;
+    const char          * pos      = src.c_str();
     std::vector<uint32_t> code_points;
+    // common english strings have the same number of codepoints and bytes. `+ 1` for the terminating 0.
+    code_points.reserve(src.size() + 1);
     uint32_t              value    = partial_start.value;
     int                   n_remain = partial_start.n_remain;
 
@@ -7132,6 +7551,7 @@ void llama_sample_typical(struct llama_context * ctx, llama_token_data_array * c
     // Replace the data in candidates with the new_candidates data
     std::copy(new_candidates.begin(), new_candidates.end(), candidates->data);
     candidates->size = new_candidates.size();
+    candidates->sorted = false;
 
     if (ctx) {
         ctx->t_sample_us += ggml_time_us() - t_start_sample_us;
@@ -7216,11 +7636,13 @@ void llama_sample_grammar(struct llama_context * ctx, llama_token_data_array * c
     const llama_token eos = llama_token_eos(&ctx->model);
 
     std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
+    candidates_decoded.reserve(candidates->size);
     std::vector<llama_grammar_candidate>                              candidates_grammar;
+    candidates_grammar.reserve(candidates->size);
 
     for (size_t i = 0; i < candidates->size; ++i) {
         const llama_token id    = candidates->data[i].id;
-        const std::string piece = llama_token_to_piece(ctx, id);
+        const std::string & piece = ctx->model.vocab.id_to_token[id].text;
         if (id == eos) {
             if (!allow_eos) {
                 candidates->data[i].logit = -INFINITY;
@@ -7228,7 +7650,7 @@ void llama_sample_grammar(struct llama_context * ctx, llama_token_data_array * c
         } else if (piece.empty() || piece[0] == 0) {
             candidates->data[i].logit = -INFINITY;
         } else {
-            candidates_decoded.push_back(decode_utf8(piece.c_str(), grammar->partial_utf8));
+            candidates_decoded.push_back(decode_utf8(piece, grammar->partial_utf8));
             candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second });
         }
     }
@@ -7432,10 +7854,10 @@ void llama_grammar_accept_token(struct llama_context * ctx, struct llama_grammar
         GGML_ASSERT(false);
     }
 
-    const std::string piece = llama_token_to_piece(ctx, token);
+    const std::string & piece = ctx->model.vocab.id_to_token[token].text;
 
     // Note terminating 0 in decoded string
-    const auto   decoded     = decode_utf8(piece.c_str(), grammar->partial_utf8);
+    const auto   decoded     = decode_utf8(piece, grammar->partial_utf8);
     const auto & code_points = decoded.first;
     for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
         grammar->stacks = llama_grammar_accept(grammar->rules, grammar->stacks, *it);
@@ -7753,18 +8175,21 @@ static void llama_convert_tensor_internal(
         return;
     }
 
-    auto block_size = tensor->type == GGML_TYPE_F16 ? 1 : (size_t)ggml_blck_size(tensor->type);
-    auto block_size_bytes = ggml_type_size(tensor->type);
+    size_t block_size = tensor->type == GGML_TYPE_F16 ? 1 : (size_t)ggml_blck_size(tensor->type);
+    size_t block_size_bytes = ggml_type_size(tensor->type);
 
     GGML_ASSERT(nelements % block_size == 0);
-    auto nblocks = nelements / block_size;
-    auto blocks_per_thread = nblocks / nthread;
-    auto spare_blocks = nblocks - (blocks_per_thread * nthread); // if blocks aren't divisible by thread count
+    size_t nblocks = nelements / block_size;
+    size_t blocks_per_thread = nblocks / nthread;
+    size_t spare_blocks = nblocks - (blocks_per_thread * nthread); // if blocks aren't divisible by thread count
 
-    for (auto tnum = 0, in_buff_offs = 0, out_buff_offs = 0; tnum < nthread; tnum++) {
-        auto thr_blocks = blocks_per_thread + (tnum == nthread - 1 ? spare_blocks : 0); // num blocks for this thread
-        auto thr_elems = thr_blocks * block_size; // number of elements for this thread
-        auto thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
+    size_t in_buff_offs = 0;
+    size_t out_buff_offs = 0;
+
+    for (int tnum = 0; tnum < nthread; tnum++) {
+        size_t thr_blocks = blocks_per_thread + (tnum == nthread - 1 ? spare_blocks : 0); // num blocks for this thread
+        size_t thr_elems = thr_blocks * block_size; // number of elements for this thread
+        size_t thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
 
         auto compute = [qtype] (ggml_type typ, uint8_t * inbuf, float * outbuf, int nels) {
             if (typ == GGML_TYPE_F16) {
@@ -7934,7 +8359,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     constexpr bool use_mmap = false;
 #endif
 
-    llama_model_loader ml(fname_inp, use_mmap);
+    llama_model_loader ml(fname_inp, use_mmap, NULL);
     if (ml.use_mmap) {
         ml.mapping.reset(new llama_mmap(&ml.file, /* prefetch */ 0, ggml_is_numa()));
     }
@@ -8178,7 +8603,6 @@ static int llama_apply_lora_from_file_internal(
 ) {
     LLAMA_LOG_INFO("%s: applying lora adapter from '%s' - please wait ...\n", __func__, path_lora);
 
-
     const int64_t t_start_lora_us = ggml_time_us();
 
     auto fin = std::ifstream(path_lora, std::ios::binary);
@@ -8231,7 +8655,7 @@ static int llama_apply_lora_from_file_internal(
     std::vector<uint8_t> base_buf;
     if (path_base_model) {
         LLAMA_LOG_INFO("%s: loading base model from '%s'\n", __func__, path_base_model);
-        ml.reset(new llama_model_loader(path_base_model, /*use_mmap*/ true));
+        ml.reset(new llama_model_loader(path_base_model, /*use_mmap*/ true, /*kv_overrides*/ NULL));
 
         size_t ctx_size;
         size_t mmapped_size;
@@ -8459,6 +8883,7 @@ struct llama_model_params llama_model_default_params() {
         /*.tensor_split                =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
+        /*.kv_overrides                =*/ nullptr,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
@@ -8687,8 +9112,6 @@ struct llama_context * llama_new_context_with_model(
 
 #ifdef GGML_USE_METAL
             if (model->n_gpu_layers > 0) {
-                ggml_metal_log_set_callback(llama_log_callback_default, NULL);
-
                 ctx->ctx_metal = ggml_metal_init(1);
                 if (!ctx->ctx_metal) {
                     LLAMA_LOG_ERROR("%s: ggml_metal_init() failed\n", __func__);
@@ -9844,6 +10267,9 @@ const std::vector<std::pair<std::string, struct ggml_tensor *>> & llama_internal
 void llama_log_set(ggml_log_callback log_callback, void * user_data) {
     g_state.log_callback = log_callback ? log_callback : llama_log_callback_default;
     g_state.log_callback_user_data = user_data;
+#ifdef GGML_USE_METAL
+    ggml_metal_log_set_callback(g_state.log_callback, g_state.log_callback_user_data);
+#endif
 }
 
 static void llama_log_internal_v(ggml_log_level level, const char * format, va_list args) {

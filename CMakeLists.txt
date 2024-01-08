@@ -43,6 +43,7 @@ else()
 endif()
 
 # general
+option(BUILD_SHARED_LIBS                "build shared libraries"                                OFF)
 option(LLAMA_STATIC                     "llama: static link libraries"                          OFF)
 option(LLAMA_NATIVE                     "llama: enable -march=native flag"                      ON)
 option(LLAMA_LTO                        "llama: enable link time optimization"                  OFF)
@@ -100,6 +101,9 @@ option(LLAMA_QKK_64                          "llama: use super-block size of 64 
 option(LLAMA_BUILD_TESTS                "llama: build tests"    ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES             "llama: build examples" ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER               "llama: build server example"                           ON)
+
+# Required for relocatable CMake package
+include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake)
 
 #
 # Compile flags
@@ -167,7 +171,7 @@ if (LLAMA_METAL)
     #add_compile_definitions(GGML_METAL_DIR_KERNELS="${CMAKE_CURRENT_SOURCE_DIR}/")
 
     # copy ggml-metal.metal to bin directory
-    configure_file(ggml-metal.metal bin/ggml-metal.metal COPYONLY)
+    configure_file(ggml-metal.metal ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.metal COPYONLY)
 
     set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS}
         ${FOUNDATION_LIBRARY}
@@ -408,15 +412,16 @@ if (LLAMA_KOMPUTE)
       set(multiValueArgs SOURCES)
       cmake_parse_arguments(compile_shader "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
       foreach(source ${compile_shader_SOURCES})
-        set(spv_file ${source}.spv)
+        get_filename_component(filename ${source} NAME)
+        set(spv_file ${filename}.spv)
         add_custom_command(
             OUTPUT ${spv_file}
             DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${source}
-              ${CMAKE_CURRENT_SOURCE_DIR}/kompute/common.comp
-              ${CMAKE_CURRENT_SOURCE_DIR}/kompute/op_getrows.comp
-              ${CMAKE_CURRENT_SOURCE_DIR}/kompute/op_mul_mv_q_n.comp
+              ${CMAKE_CURRENT_SOURCE_DIR}/kompute-shaders/common.comp
+              ${CMAKE_CURRENT_SOURCE_DIR}/kompute-shaders/op_getrows.comp
+              ${CMAKE_CURRENT_SOURCE_DIR}/kompute-shaders/op_mul_mv_q_n.comp
               COMMAND ${glslc_executable} --target-env=vulkan1.2 -o ${spv_file} ${CMAKE_CURRENT_SOURCE_DIR}/${source}
-            COMMENT "Compiling ${source} to ${source}.spv"
+            COMMENT "Compiling ${source} to ${spv_file}"
         )
 
         get_filename_component(RAW_FILE_NAME ${spv_file} NAME)
@@ -449,35 +454,35 @@ if (LLAMA_KOMPUTE)
 
         # Compile our shaders
         compile_shader(SOURCES
-          kompute/op_scale.comp
-          kompute/op_scale_8.comp
-          kompute/op_add.comp
-          kompute/op_addrow.comp
-          kompute/op_mul.comp
-          kompute/op_mulrow.comp
-          kompute/op_silu.comp
-          kompute/op_relu.comp
-          kompute/op_gelu.comp
-          kompute/op_softmax.comp
-          kompute/op_norm.comp
-          kompute/op_rmsnorm.comp
-          kompute/op_diagmask.comp
-          kompute/op_mul_mat_mat_f32.comp
-          kompute/op_mul_mat_f16.comp
-          kompute/op_mul_mat_q8_0.comp
-          kompute/op_mul_mat_q4_0.comp
-          kompute/op_mul_mat_q4_1.comp
-          kompute/op_mul_mat_q6_k.comp
-          kompute/op_getrows_f16.comp
-          kompute/op_getrows_q4_0.comp
-          kompute/op_getrows_q4_1.comp
-          kompute/op_getrows_q6_k.comp
-          kompute/op_rope_f16.comp
-          kompute/op_rope_f32.comp
-          kompute/op_cpy_f16_f16.comp
-          kompute/op_cpy_f16_f32.comp
-          kompute/op_cpy_f32_f16.comp
-          kompute/op_cpy_f32_f32.comp
+          kompute-shaders/op_scale.comp
+          kompute-shaders/op_scale_8.comp
+          kompute-shaders/op_add.comp
+          kompute-shaders/op_addrow.comp
+          kompute-shaders/op_mul.comp
+          kompute-shaders/op_mulrow.comp
+          kompute-shaders/op_silu.comp
+          kompute-shaders/op_relu.comp
+          kompute-shaders/op_gelu.comp
+          kompute-shaders/op_softmax.comp
+          kompute-shaders/op_norm.comp
+          kompute-shaders/op_rmsnorm.comp
+          kompute-shaders/op_diagmask.comp
+          kompute-shaders/op_mul_mat_mat_f32.comp
+          kompute-shaders/op_mul_mat_f16.comp
+          kompute-shaders/op_mul_mat_q8_0.comp
+          kompute-shaders/op_mul_mat_q4_0.comp
+          kompute-shaders/op_mul_mat_q4_1.comp
+          kompute-shaders/op_mul_mat_q6_k.comp
+          kompute-shaders/op_getrows_f16.comp
+          kompute-shaders/op_getrows_q4_0.comp
+          kompute-shaders/op_getrows_q4_1.comp
+          kompute-shaders/op_getrows_q6_k.comp
+          kompute-shaders/op_rope_f16.comp
+          kompute-shaders/op_rope_f32.comp
+          kompute-shaders/op_cpy_f16_f16.comp
+          kompute-shaders/op_cpy_f16_f32.comp
+          kompute-shaders/op_cpy_f32_f16.comp
+          kompute-shaders/op_cpy_f32_f32.comp
         )
 
         # Create a custom target for our generated shaders
@@ -515,15 +520,15 @@ if (LLAMA_KOMPUTE)
 
         # Create a custom command that depends on the generated_shaders
         add_custom_command(
-            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp
-            COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ggml-kompute.stamp
+            COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/ggml-kompute.stamp
             DEPENDS generated_shaders
-            COMMENT "Ensuring shaders are generated before compiling ggml-vulkan.cpp"
+            COMMENT "Ensuring shaders are generated before compiling ggml-kompute.cpp"
         )
 
         # Add the stamp to the main sources to ensure dependency tracking
-        set(GGML_SOURCES_KOMPUTE ggml-vulkan.cpp ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp)
-        set(GGML_HEADERS_KOMPUTE ggml-vulkan.h ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan.stamp)
+        set(GGML_SOURCES_KOMPUTE ggml-kompute.cpp ${CMAKE_CURRENT_BINARY_DIR}/ggml-kompute.stamp)
+        set(GGML_HEADERS_KOMPUTE ggml-kompute.h ${CMAKE_CURRENT_BINARY_DIR}/ggml-kompute.stamp)
         add_compile_definitions(GGML_USE_KOMPUTE)
         set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} kompute)
         set(LLAMA_EXTRA_INCLUDES ${LLAMA_EXTRA_INCLUDES} ${CMAKE_BINARY_DIR})
