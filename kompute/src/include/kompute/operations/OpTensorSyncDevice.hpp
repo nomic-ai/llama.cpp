@@ -58,6 +58,9 @@ class OpTensorSyncDevice : public OpBase
   private:
     // -------------- ALWAYS OWNED RESOURCES
     std::vector<std::shared_ptr<Tensor>> mTensors;
+    vk::Buffer *mPrimaryBuffer;
+    vk::Buffer *mStagingBuffer;
+    vk::DeviceSize mSize;
 };
 
 } // End namespace kp
