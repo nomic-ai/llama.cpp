@@ -12,6 +12,7 @@
 
 // These are generated at build time by cmake custom command
 #include "shaderop_scale.h"
+#include "shaderop_scale_8.h"
 #include "shaderop_add.h"
 #include "shaderop_addrow.h"
 #include "shaderop_mul.h"
@@ -725,8 +726,12 @@ void ggml_vk_scale(kp::Sequence& seq,
                    const std::shared_ptr<kp::Tensor>& out,
                    uint32_t inOff, uint32_t outOff,
                    uint32_t size, float scale) {
-    const static auto spirv = getSpirvShader(kp::shader_data::op_scale_comp_spv,
-        kp::shader_data::op_scale_comp_spv_len);
+    const static auto spirv_1 = getSpirvShader(
+        kp::shader_data::op_scale_comp_spv, kp::shader_data::op_scale_comp_spv_len
+    );
+    const static auto spirv_8 = getSpirvShader(
+        kp::shader_data::op_scale_8_comp_spv, kp::shader_data::op_scale_8_comp_spv_len
+    );
 
     struct PushConstants {
         uint32_t inOff, outOff;
@@ -736,11 +741,19 @@ void ggml_vk_scale(kp::Sequence& seq,
         scale
     };
 
+    const auto * spirv = &spirv_1;
+    std::string name(__func__);
+    if (size % 8 == 0) {
+        size /= 8;
+        name += "_8";
+        spirv = &spirv_8;
+    }
+
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
-    if (!komputeManager()->hasAlgorithm(__func__))
-        s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(), {in, out}, spirv, {size}, {}, {pushConsts});
-    else {
-        s_algo = komputeManager()->getAlgorithm(__func__);
+    if (!komputeManager()->hasAlgorithm(name)) {
+        s_algo = komputeManager()->algorithm<float, PushConstants>(__func__, s_kompute_context->pool.get(), {in, out}, *spirv, {size}, {}, {pushConsts});
+    } else {
+        s_algo = komputeManager()->getAlgorithm(name);
         s_algo->setTensors({in, out});
         s_algo->setWorkgroup({size});
         s_algo->setPushConstants<PushConstants>({pushConsts});
@@ -1183,8 +1196,8 @@ void ggml_vk_rope(
     const std::shared_ptr<kp::Tensor>& inB,
     const std::shared_ptr<kp::Tensor>& out,
     uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
-    ggml_type src0t, int32_t n_dims, int32_t mode,
-    float freq_base, float freq_scale,
+    ggml_type src0t, int32_t n_dims, int32_t mode, int32_t n_orig_ctx,
+    float freq_base, float freq_scale, float ext_factor, float attn_factor, float beta_fast, float beta_slow,
     int32_t ne01, int32_t ne02, int32_t ne03,
     uint32_t nb00, uint32_t nb01, uint32_t nb02, uint32_t nb03,
     int32_t ne0,
@@ -1212,15 +1225,15 @@ void ggml_vk_rope(
 
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t n_dims, mode;
-        float freq_base, freq_scale;
+        int32_t n_dims, mode, n_orig_ctx;
+        float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
         uint32_t nb00, nb01, nb02, nb03;
         int32_t ne0;
         uint32_t nb0, nb1, nb2, nb3;
     } pushConsts {
         safe_divide(inAOff, type_size), safe_divide(inBOff, 4), safe_divide(outOff, type_size),
-        n_dims, mode,
-        freq_base, freq_scale,
+        n_dims, mode, n_orig_ctx,
+        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow,
         nb00, nb01, nb02, nb03,
         ne0,
         nb0, nb1, nb2, nb3
@@ -1417,27 +1430,32 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                 case GGML_OP_SCALE:
                     {
                         const float scale = *(const float *) src1->data;
-                        ggml_vk_scale(seq, id_src0, id_dst, off_src0, off_dst, ggml_nelements(dst)/8, scale);
+                        ggml_vk_scale(seq, id_src0, id_dst, off_src0, off_dst, ggml_nelements(dst), scale);
                     } break;
                 case GGML_OP_UNARY:
-                    switch (ggml_get_unary_op(gf->nodes[i])) {
-                        case GGML_UNARY_OP_SILU:
-                            {
-                                ggml_vk_silu(seq, id_src0, id_dst, off_src0, off_dst, ggml_nelements(dst)/4);
-                            } break;
-                        case GGML_UNARY_OP_RELU:
-                            {
-                                ggml_vk_relu(seq, id_src0, id_dst, off_src0, off_dst, ggml_nelements(dst)/4);
-                            } break;
-                        case GGML_UNARY_OP_GELU:
-                            {
-                                ggml_vk_gelu(seq, id_src0, id_dst, off_src0, off_dst, ggml_nelements(dst)/8);
-                            } break;
-                        default:
-                            {
-                                fprintf(stderr, "%s: node %3d, op = %8s not implemented\n", __func__, i, ggml_op_name(dst->op));
-                                GGML_ASSERT(false);
-                            }
+                    {
+                        int64_t n = ggml_nelements(dst);
+                        GGML_ASSERT(n % 4 == 0);
+                        switch (ggml_get_unary_op(gf->nodes[i])) {
+                            case GGML_UNARY_OP_SILU:
+                                {
+                                    ggml_vk_silu(seq, id_src0, id_dst, off_src0, off_dst, n/4);
+                                } break;
+                            case GGML_UNARY_OP_RELU:
+                                {
+                                    ggml_vk_relu(seq, id_src0, id_dst, off_src0, off_dst, n/4);
+                                } break;
+                            case GGML_UNARY_OP_GELU:
+                                {
+                                    GGML_ASSERT(n % 8 == 0);
+                                    ggml_vk_gelu(seq, id_src0, id_dst, off_src0, off_dst, n/8);
+                                } break;
+                            default:
+                                {
+                                    fprintf(stderr, "%s: node %3d, op = %8s not implemented\n", __func__, i, ggml_op_name(dst->op));
+                                    GGML_ASSERT(false);
+                                }
+                        }
                     } break;
                 case GGML_OP_SOFT_MAX:
                     {
@@ -1456,6 +1474,8 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                     } break;
                 case GGML_OP_RMS_NORM:
                     {
+                        GGML_ASSERT(ne00 % 4 == 0);
+
                         float eps;
                         memcpy(&eps, dst->op_params, sizeof(float));
                         ggml_vk_rms_norm(seq, id_src0, id_dst, off_src0, off_dst, ne00, nb01, ggml_nrows(src0), eps);
@@ -1526,13 +1546,23 @@ void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml_cgraph
                         GGML_ASSERT(ne10 == ne02);
                         GGML_ASSERT(src0t == dstt);
                         // const int n_past = ((int32_t *) dst->op_params)[0];
-                        const int n_dims = ((int32_t *) dst->op_params)[1];
-                        const int mode   = ((int32_t *) dst->op_params)[2];
-                        float freq_base;
-                        float freq_scale;
-                        memcpy(&freq_base,  (int32_t *) dst->op_params + 4, sizeof(float));
-                        memcpy(&freq_scale, (int32_t *) dst->op_params + 5, sizeof(float));
-                        ggml_vk_rope(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, src0t, n_dims, mode, freq_base, freq_scale, ne01, ne02, ne03, nb00, nb01, nb02, nb03, ne0, nb0, nb1, nb2, nb3);
+                        const int n_dims     = ((int32_t *) dst->op_params)[1];
+                        const int mode       = ((int32_t *) dst->op_params)[2];
+                        // skip 3, n_ctx used in GLM RoPE, unimplemented in Vulkan
+                        const int n_orig_ctx = ((int32_t *) dst->op_params)[4];
+
+                        float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+                        memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
+                        memcpy(&freq_scale,  (int32_t *) dst->op_params +  6, sizeof(float));
+                        memcpy(&ext_factor,  (int32_t *) dst->op_params +  7, sizeof(float));
+                        memcpy(&attn_factor, (int32_t *) dst->op_params +  8, sizeof(float));
+                        memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
+                        memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
+                        ggml_vk_rope(
+                            seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, src0t, n_dims, mode, n_orig_ctx,
+                            freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow,
+                            ne01, ne02, ne03, nb00, nb01, nb02, nb03, ne0, nb0, nb1, nb2, nb3
+                        );
                     } break;
                 case GGML_OP_DUP:
                 case GGML_OP_CPY:
