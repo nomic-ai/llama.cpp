@@ -488,7 +488,7 @@ void ggml_vk_free_memory(ggml_vk_memory &memory)
 static
 decltype(ggml_kompute_context::buffers)::iterator ggml_vk_find_tensor(struct ggml_kompute_context * ctx, struct ggml_tensor * t, uint64_t & offset) {
     if (t->buffer && t->buffer->backend && t->buffer->backend->context) {
-        ctx = t->buffer->backend->context;
+        ctx = (ggml_kompute_context *)t->buffer->backend->context;
     }
 
     for (auto it = ctx->buffers.begin(); ; it++) {
@@ -1649,7 +1649,7 @@ static void * ggml_backend_kompute_buffer_get_base(ggml_backend_buffer_t buffer)
 }
 
 static void ggml_backend_kompute_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    delete buffer->context;
+    delete (ggml_vk_memory *)buffer->context;
     GGML_UNUSED(buffer);
 }
 
@@ -1737,7 +1737,7 @@ ggml_backend_t ggml_backend_kompute_init() {
 
     ggml_backend_t kompute_backend = new struct ggml_backend;
 
-    *kompute_backend = (struct ggml_backend) {
+    *kompute_backend = {
         /* .interface = */ kompute_backend_i,
         /* .context   = */ ctx,
     };
