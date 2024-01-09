@@ -6,8 +6,9 @@
  * this software. Except as expressly granted in the SOM license, all rights are reserved by Nomic, Inc.
  */
 
-#include "ggml-vulkan.h"
 #include "ggml.h"
+#include "ggml-backend.h"
+#include "ggml-vulkan.h"
 
 // These are generated at build time by cmake custom command
 #include "shaderop_scale.h"
@@ -1590,4 +1591,134 @@ kp::Tensor::TensorDataTypes
 kp::TensorT<uint8_t>::dataType()
 {
     return TensorDataTypes::eUnsignedInt;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+// backend interface
+
+static const char * ggml_backend_kompute_name(ggml_backend_t backend) {
+    return "Kompute";
+
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_kompute_free(ggml_backend_t backend) {
+    struct ggml_kompute_context * ctx = (struct ggml_kompute_context *)backend->context;
+    ggml_vk_free(ctx);
+    delete backend;
+}
+
+static void * ggml_backend_kompute_buffer_get_base(ggml_backend_buffer_t buffer) {
+    return ((ggml_vk_memory *)buffer->context)->data;
+}
+
+static void ggml_backend_kompute_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    delete buffer->context;
+    GGML_UNUSED(buffer);
+}
+
+static struct ggml_backend_buffer_i kompute_backend_buffer_i = {
+    /* .free_buffer    = */ ggml_backend_kompute_buffer_free_buffer,
+    /* .get_base       = */ ggml_backend_kompute_buffer_get_base,
+    /* .get_alloc_size = */ NULL, // defaults to ggml_nbytes
+    /* .init_tensor    = */ NULL, // no initialization required
+    /* .free_tensor    = */ NULL, // no cleanup required
+};
+
+static ggml_backend_buffer_t ggml_backend_kompute_alloc_buffer(ggml_backend_t backend, size_t size) {
+    struct ggml_kompute_context * ctx = (struct ggml_kompute_context *)backend->context;
+
+    auto * data = new ggml_vk_memory(ggml_vk_allocate(size));
+
+    // TODO: set proper name of the buffers
+    ggml_vk_add_buffer(ctx, "backend", *data);
+
+    return ggml_backend_buffer_init(backend, kompute_backend_buffer_i, data, size);
+}
+
+static size_t ggml_backend_kompute_get_alignment(ggml_backend_t backend) {
+    return 32;
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_kompute_set_tensor_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
+    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+
+    memcpy((char *)tensor->data + offset, data, size);
+
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_kompute_get_tensor_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
+    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+
+    memcpy(data, (const char *)tensor->data + offset, size);
+
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_kompute_synchronize(ggml_backend_t backend) {
+    GGML_UNUSED(backend);
+}
+
+// TODO(cebtenzzre): we don't have unified memory, see how CUDA does it
+static void ggml_backend_kompute_cpy_tensor_from(ggml_backend_t backend, struct ggml_tensor * src, struct ggml_tensor * dst) {
+    ggml_backend_tensor_get(src, dst->data, 0, ggml_nbytes(src));
+
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_kompute_cpy_tensor_to(ggml_backend_t backend, struct ggml_tensor * src, struct ggml_tensor * dst) {
+    ggml_backend_tensor_set_async(dst, src->data, 0, ggml_nbytes(src));
+
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_kompute_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+    struct ggml_kompute_context * ctx = (struct ggml_kompute_context *)backend->context;
+
+    ggml_vk_graph_compute(ctx, cgraph);
+}
+
+static bool ggml_backend_kompute_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
+    return true;
+    GGML_UNUSED(backend);
+    GGML_UNUSED(op);
+}
+
+static struct ggml_backend_i kompute_backend_i = {
+    /* .get_name            = */ ggml_backend_kompute_name,
+    /* .free                = */ ggml_backend_kompute_free,
+    /* .alloc_buffer        = */ ggml_backend_kompute_alloc_buffer,
+    /* .get_alignment       = */ ggml_backend_kompute_get_alignment,
+    /* .set_tensor_async    = */ ggml_backend_kompute_set_tensor_async,
+    /* .get_tensor_async    = */ ggml_backend_kompute_get_tensor_async,
+    /* .synchronize         = */ ggml_backend_kompute_synchronize,
+    /* .cpy_tensor_from     = */ ggml_backend_kompute_cpy_tensor_from,
+    /* .cpy_tensor_to       = */ ggml_backend_kompute_cpy_tensor_to,
+    /* .graph_plan_create   = */ NULL, // the kompute implementation does not require creating graph plans atm
+    /* .graph_plan_free     = */ NULL,
+    /* .graph_plan_compute  = */ NULL,
+    /* .graph_compute       = */ ggml_backend_kompute_graph_compute,
+    /* .supports_op         = */ ggml_backend_kompute_supports_op,
+};
+
+ggml_backend_t ggml_backend_kompute_init() {
+    struct ggml_kompute_context * ctx = ggml_vk_init();
+
+    ggml_backend_t kompute_backend = new struct ggml_backend;
+
+    *kompute_backend = (struct ggml_backend) {
+        /* .interface = */ kompute_backend_i,
+        /* .context   = */ ctx,
+    };
+
+    return kompute_backend;
+}
+
+bool ggml_backend_is_kompute(ggml_backend_t backend) {
+    return backend->iface.get_name == ggml_backend_kompute_name;
 }
