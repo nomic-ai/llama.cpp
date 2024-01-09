@@ -8,6 +8,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-backend-impl.h"
 #include "ggml-vulkan.h"
 
 // These are generated at build time by cmake custom command
