@@ -487,6 +487,10 @@ void ggml_vk_free_memory(ggml_vk_memory &memory)
 
 static
 decltype(ggml_kompute_context::buffers)::iterator ggml_vk_find_tensor(struct ggml_kompute_context * ctx, struct ggml_tensor * t, uint64_t & offset) {
+    if (t->buffer && t->buffer->backend && t->buffer->backend->context) {
+        ctx = t->buffer->backend->context;
+    }
+
     for (auto it = ctx->buffers.begin(); ; it++) {
         if (it == ctx->buffers.end()) {
             fprintf(stderr, "%s: Failed to find tensor %p\n", __func__, t->data);
@@ -1673,15 +1677,6 @@ static size_t ggml_backend_kompute_get_alignment(ggml_backend_t backend) {
     GGML_UNUSED(backend);
 }
 
-static void ggml_backend_kompute_set_tensor_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
-
-    memcpy((char *)tensor->data + offset, data, size);
-
-    GGML_UNUSED(backend);
-}
-
 static void ggml_backend_kompute_get_tensor_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
@@ -1725,7 +1720,7 @@ static struct ggml_backend_i kompute_backend_i = {
     /* .free                = */ ggml_backend_kompute_free,
     /* .alloc_buffer        = */ ggml_backend_kompute_alloc_buffer,
     /* .get_alignment       = */ ggml_backend_kompute_get_alignment,
-    /* .set_tensor_async    = */ ggml_backend_kompute_set_tensor_async,
+    /* .set_tensor_async    = */ NULL, // not sure that we can do this
     /* .get_tensor_async    = */ ggml_backend_kompute_get_tensor_async,
     /* .synchronize         = */ ggml_backend_kompute_synchronize,
     /* .cpy_tensor_from     = */ ggml_backend_kompute_cpy_tensor_from,
