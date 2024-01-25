@@ -44,7 +44,6 @@
 #include <mutex>
 #include <atomic>
 #include <cstring>
-#include <immintrin.h>
 #include <kompute/Kompute.hpp>
 
 #define QK4_0 32
