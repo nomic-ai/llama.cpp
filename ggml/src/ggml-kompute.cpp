@@ -198,7 +198,6 @@ static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physical_devi
 
     if (!availableFeatures12.storageBuffer8BitAccess ||
         !availableFeatures12.uniformAndStorageBuffer8BitAccess ||
-        !availableFeatures12.shaderFloat16 ||
         !availableFeatures12.shaderInt8) {
         return false;
     }
@@ -1855,8 +1854,7 @@ static void ggml_backend_kompute_device_ref(ggml_backend_buffer_type_t buft) {
     if (!ctx->device_ref) {
         komputeManager()->initializeDevice(
             ctx->device, {}, {
-                "VK_KHR_shader_float16_int8", "VK_KHR_8bit_storage",
-                "VK_KHR_16bit_storage", "VK_KHR_shader_non_semantic_info"
+                "VK_KHR_8bit_storage", "VK_KHR_16bit_storage", "VK_KHR_shader_non_semantic_info"
             }
         );
     }
