@@ -41,6 +41,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -119,6 +120,59 @@ static void enable_sam() {
 }
 #endif
 
+void ggml_vk_device_destroy(ggml_vk_device * device) {
+    free(const_cast<char *>(device->name));
+}
+
+struct ggml_vk_device_cpp: ggml_vk_device {
+    ggml_vk_device_cpp(
+        int index, int type, size_t heapSize, const char * name, const char * vendor, int subgroupSize,
+        uint64_t bufferAlignment, uint64_t maxAlloc
+    )
+        : ggml_vk_device(
+              /* index           = */ index,
+              /* type            = */ type,
+              /* heapSize        = */ heapSize,
+              /* name            = */ strdup(name),
+              /* vendor          = */ vendor,
+              /* supgroupSize    = */ subgroupSize,
+              /* bufferAlignment = */ bufferAlignment,
+              /* maxAlloc        = */ maxAlloc
+        )
+    {}
+
+    ggml_vk_device_cpp(ggml_vk_device_cpp && other)
+        : ggml_vk_device(other)
+    {
+        other.steal();
+    }
+
+    ggml_vk_device_cpp(ggml_vk_device_cpp &  other)
+        : ggml_vk_device(other)
+    {
+        name = strdup(name);
+    }
+
+    ggml_vk_device_cpp & operator=(ggml_vk_device_cpp && other) {
+        ggml_vk_device_destroy(this);
+        static_cast<ggml_vk_device &>(*this) = other;
+        other.steal();
+        return *this;
+    }
+
+    ggml_vk_device_cpp & operator=(ggml_vk_device_cpp &  other) {
+        ggml_vk_device_destroy(this);
+        static_cast<ggml_vk_device &>(*this) = other;
+        name = strdup(name);
+        return *this;
+    }
+
+    ~ggml_vk_device_cpp() { ggml_vk_device_destroy(this); }
+
+    // release the reference so we don't double-free name
+    void steal() { name = nullptr; }
+};
+
 static bool ggml_vk_checkPhysicalDeviceFeatures(vk::PhysicalDevice physical_device) {
     vk::PhysicalDeviceFeatures availableFeatures;
     physical_device.getFeatures(&availableFeatures);
@@ -165,8 +219,8 @@ static const char * ggml_vk_getVendorName(uint32_t vendorID) {
     }
 }
 
-static std::vector<ggml_vk_device> ggml_vk_available_devices_internal(size_t memoryRequired) {
-    std::vector<ggml_vk_device> results;
+static std::list<ggml_vk_device_cpp> ggml_vk_available_devices_internal(size_t memoryRequired) {
+    std::list<ggml_vk_device_cpp> results;
     if (!komputeManager()->hasVulkan() || !komputeManager()->hasInstance())
         return results;
 
@@ -233,32 +287,32 @@ static std::vector<ggml_vk_device> ggml_vk_available_devices_internal(size_t mem
         if (subgroup_props.subgroupSize < 32)
             continue;
 
-        ggml_vk_device d;
-        d.index = i;
-        d.type = dev_props.deviceType;
-        d.heapSize = heapSize;
-        d.vendor = strdup(ggml_vk_getVendorName(dev_props.vendorID));
-        d.subgroupSize = subgroup_props.subgroupSize;
-        d.bufferAlignment = dev_props.limits.minStorageBufferOffsetAlignment;
-
-        if (has_maintenance4) {
-            d.maxAlloc = std::min(dev_props3.maxMemoryAllocationSize, dev_props4.maxBufferSize);
-        } else {
-            d.maxAlloc = dev_props3.maxMemoryAllocationSize;
-        }
-
         std::string name(dev_props.deviceName);
         size_t n_idx = ++count_by_name[name];
         if (n_idx > 1) {
             name += " (" + std::to_string(n_idx) + ")";
         }
-        d.name = strdup(name.c_str());
 
-        results.push_back(d);
+        uint64_t maxAlloc = dev_props3.maxMemoryAllocationSize;
+        if (has_maintenance4) {
+            maxAlloc = std::min(maxAlloc, dev_props4.maxBufferSize);
+        }
+
+        results.emplace_back(
+            /* index           = */ i,
+            /* type            = */ dev_props.deviceType,
+            /* heapSize        = */ heapSize,
+            /* name            = */ name.c_str(),
+            /* vendor          = */ ggml_vk_getVendorName(dev_props.vendorID),
+            /* subgroupSize    = */ subgroup_props.subgroupSize,
+            /* bufferAlignment = */ dev_props.limits.minStorageBufferOffsetAlignment,
+            /* maxAlloc        = */ maxAlloc
+        );
     }
 
-    std::stable_sort(results.begin(), results.end(),
-        [](const ggml_vk_device& lhs, const ggml_vk_device& rhs) -> bool {
+    // std::list::sort is guaranteed to be stable
+    results.sort(
+        [](const ggml_vk_device_cpp & lhs, const ggml_vk_device_cpp & rhs) -> bool {
             if (lhs.type != rhs.type) {
                 if (lhs.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) return true;
                 if (rhs.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) return false;
@@ -283,39 +337,43 @@ ggml_vk_device * ggml_vk_available_devices(size_t memoryRequired, size_t * count
 
     size_t nbytes = sizeof (ggml_vk_device) * (devices.size());
     auto * arr = static_cast<ggml_vk_device *>(malloc(nbytes));
-    memcpy(arr, devices.data(), nbytes);
+
+    int i = 0;
+    for (auto & d : devices) { arr[i++] = d; d.steal(); }
+
     return arr;
 }
 
-static void ggml_vk_filterByVendor(std::vector<ggml_vk_device>& devices, const std::string& targetVendor) {
+static void ggml_vk_filterByVendor(std::list<ggml_vk_device_cpp> & devices, const std::string & targetVendor) {
     devices.erase(
         std::remove_if(devices.begin(), devices.end(),
-            [&targetVendor](const ggml_vk_device& device) {
+            [&targetVendor](const ggml_vk_device_cpp & device) {
                 return device.vendor != targetVendor;
             }),
         devices.end()
     );
 }
 
-static void ggml_vk_filterByName(std::vector<ggml_vk_device>& devices, const std::string& targetName) {
+static void ggml_vk_filterByName(std::list<ggml_vk_device_cpp> & devices, const std::string & targetName) {
     devices.erase(
         std::remove_if(devices.begin(), devices.end(),
-            [&targetName](const ggml_vk_device& device) {
+            [&targetName](const ggml_vk_device_cpp & device) {
                 return device.name != targetName;
             }),
         devices.end()
     );
 }
 
-static bool ggml_vk_get_device(ggml_vk_device * device, size_t memoryRequired, const std::string & name) {
-    if (name.empty())
+bool ggml_vk_get_device(ggml_vk_device * device, size_t memoryRequired, const char * name) {
+    if (!*name)
         return false;
 
     auto devices = ggml_vk_available_devices_internal(memoryRequired);
-    if (name == "amd" || name == "nvidia" || name == "intel") {
-        ggml_vk_filterByVendor(devices, name);
-    } else if (name != "gpu") {
-        ggml_vk_filterByName(devices, name);
+    std::string name_str(name);
+    if (name_str == "amd" || name_str == "nvidia" || name_str == "intel") {
+        ggml_vk_filterByVendor(devices, name_str);
+    } else if (name_str != "gpu") {
+        ggml_vk_filterByName(devices, name_str);
     }
 
     if (devices.empty())
@@ -323,10 +381,6 @@ static bool ggml_vk_get_device(ggml_vk_device * device, size_t memoryRequired, c
 
     *device = devices.front();
     return true;
-}
-
-bool ggml_vk_get_device(ggml_vk_device * device, size_t memoryRequired, const char * name) {
-    return ggml_vk_get_device(device, memoryRequired, std::string(name));
 }
 
 bool ggml_vk_has_vulkan() {
@@ -344,7 +398,10 @@ ggml_vk_device ggml_vk_current_device() {
     auto devices = ggml_vk_available_devices_internal(0);
     ggml_vk_filterByName(devices, komputeManager()->physicalDevice()->getProperties().deviceName.data());
     GGML_ASSERT(!devices.empty());
-    return devices.front();
+
+    ggml_vk_device device = devices.front();
+    devices.front().steal();
+    return device;
 }
 
 static
