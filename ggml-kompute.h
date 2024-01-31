@@ -22,6 +22,7 @@ struct ggml_vk_device {
     uint64_t maxAlloc;
 };
 
+void ggml_vk_device_destroy(struct ggml_vk_device * device);
 struct ggml_vk_device * ggml_vk_available_devices(size_t memoryRequired, size_t * count);
 bool ggml_vk_get_device(struct ggml_vk_device * device, size_t memoryRequired, const char * name);
 bool ggml_vk_has_vulkan(void);
