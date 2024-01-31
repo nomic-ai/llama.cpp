@@ -129,7 +129,7 @@ struct ggml_vk_device_cpp: ggml_vk_device {
         int index, int type, size_t heapSize, const char * name, const char * vendor, int subgroupSize,
         uint64_t bufferAlignment, uint64_t maxAlloc
     )
-        : ggml_vk_device(
+        : ggml_vk_device({
               /* index           = */ index,
               /* type            = */ type,
               /* heapSize        = */ heapSize,
@@ -138,7 +138,7 @@ struct ggml_vk_device_cpp: ggml_vk_device {
               /* supgroupSize    = */ subgroupSize,
               /* bufferAlignment = */ bufferAlignment,
               /* maxAlloc        = */ maxAlloc
-        )
+        })
     {}
 
     ggml_vk_device_cpp(ggml_vk_device_cpp && other)
