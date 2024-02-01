@@ -1829,9 +1829,7 @@ static void ggml_backend_kompute_device_ref(ggml_backend_buffer_type_t buft) {
 
     if (!ctx->device_ref) {
         komputeManager()->initializeDevice(
-            ctx->device, {}, {
-                "VK_KHR_8bit_storage", "VK_KHR_16bit_storage", "VK_KHR_shader_non_semantic_info"
-            }
+            ctx->device, {}, {"VK_KHR_8bit_storage", "VK_KHR_16bit_storage", "VK_KHR_shader_non_semantic_info"}
         );
     }
 
@@ -1858,10 +1856,9 @@ static const char * ggml_backend_kompute_buffer_get_name(ggml_backend_buffer_t b
 
 static void ggml_backend_kompute_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     auto * memory = (ggml_vk_memory *)buffer->context;
-    if (ggml_vk_has_device()) {
-        ggml_vk_free_memory(*memory);
-    }
+    ggml_vk_free_memory(*memory);
     delete memory;
+    ggml_backend_kompute_device_unref(buffer->buft);
 }
 
 static void * ggml_backend_kompute_buffer_get_base(ggml_backend_buffer_t buffer) {
