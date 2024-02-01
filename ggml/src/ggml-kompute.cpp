@@ -488,7 +488,7 @@ vk::DeviceMemory *ggml_vk_allocate(size_t size, vk::MemoryPropertyFlags flags, v
     vk::Result r = komputeManager()->device()->allocateMemory(&allocInfo, nullptr, vkDeviceMemory);
     if (r != vk::Result::eSuccess) {
         std::cerr << "Error allocating memory " << vk::to_string(r) << std::endl;
-        throw std::runtime_error("Error allocating vulkan memory.");
+        return nullptr;
     }
     return vkDeviceMemory;
 }
@@ -510,9 +510,13 @@ static ggml_vk_memory ggml_vk_allocate(size_t size) {
     bool isHostVisible = false;
     {
         memory.primaryBuffer = ggml_vk_allocate_buffer(size);
+
         vk::MemoryRequirements memoryRequirements = komputeManager()->device()->getBufferMemoryRequirements(*memory.primaryBuffer);
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
         memory.primaryMemory = ggml_vk_allocate(size, memoryPropertyFlags, memoryRequirements, &isHostVisible);
+        if (!memory.primaryMemory)
+            return {};
+
         komputeManager()->device()->bindBufferMemory(*memory.primaryBuffer, *memory.primaryMemory, 0);
         if (isHostVisible) {
             vk::Result r = komputeManager()->device()->mapMemory(*memory.primaryMemory, 0, size, vk::MemoryMapFlags(), &memory.data);
@@ -1942,6 +1946,11 @@ static const char * ggml_backend_kompute_buffer_type_get_name(ggml_backend_buffe
 static ggml_backend_buffer_t ggml_backend_kompute_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     ggml_backend_kompute_device_ref(buft);
     auto * ctx = new ggml_vk_memory(ggml_vk_allocate(size));
+    if (!ctx->primaryMemory) {
+        ggml_backend_kompute_device_unref(buft);
+        delete ctx;
+        return nullptr; // allocation failed
+    }
     return ggml_backend_buffer_init(buft, ggml_backend_kompute_buffer_i, ctx, size);
 }
 

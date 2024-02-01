@@ -3,6 +3,9 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
