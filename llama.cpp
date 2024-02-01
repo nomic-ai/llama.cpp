@@ -15428,7 +15428,7 @@ void llama_free_model(struct llama_model * model) {
     delete model;
 }
 
-static struct llama_context * llama_new_context_with_model_internal(
+struct llama_context * llama_new_context_with_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
 
@@ -15774,18 +15774,6 @@ static struct llama_context * llama_new_context_with_model_internal(
 #endif
 
     return ctx;
-}
-
-struct llama_context * llama_new_context_with_model(
-    struct llama_model * model,
-    struct llama_context_params params
-) {
-    try {
-        return llama_new_context_with_model_internal(model, params);
-    } catch (const std::exception & err) {
-        LLAMA_LOG_ERROR("%s: failed to init context: %s\n", __func__, err.what());
-        return nullptr;
-    }
 }
 
 void llama_free(struct llama_context * ctx) {
