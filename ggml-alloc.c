@@ -794,7 +794,7 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
         for (size_t i = 0; i < *n_buffers; i++) {
             ggml_backend_buffer_free(*buffers[i]);
         }
-        free(buffers);
+        free(*buffers);
         return false;
     }
 
