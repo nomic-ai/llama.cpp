@@ -3,6 +3,9 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -163,7 +166,7 @@ extern "C" {
     GGML_API ggml_backend_sched_t  ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size);
     GGML_API void                  ggml_backend_sched_free(ggml_backend_sched_t sched);
     // Initialize backend buffers from a measure graph
-    GGML_API void                  ggml_backend_sched_init_measure(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph);
+    GGML_API bool                  ggml_backend_sched_init_measure(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph);
     // Get the number of splits of the last graph
     GGML_API int                   ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched);
 

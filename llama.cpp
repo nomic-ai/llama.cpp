@@ -10168,7 +10168,7 @@ void llama_free_model(struct llama_model * model) {
     delete model;
 }
 
-static struct llama_context * llama_new_context_with_model_internal(
+struct llama_context * llama_new_context_with_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
 
@@ -10393,7 +10393,11 @@ static struct llama_context * llama_new_context_with_model_internal(
             ggml_cgraph * gf = llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0));
 
             // initialize scheduler with the worst-case graph
-            ggml_backend_sched_init_measure(ctx->sched, gf);
+            if (!ggml_backend_sched_init_measure(ctx->sched, gf)) {
+                LLAMA_LOG_ERROR("%s: ggml_backend_sched_init_measure() failed\n", __func__);
+                llama_free(ctx);
+                return nullptr;
+            }
             ctx->alloc = ggml_backend_sched_get_tallocr(ctx->sched, ctx->backend_cpu);
 
             for (ggml_backend_t backend : ctx->backends) {
@@ -10424,18 +10428,6 @@ static struct llama_context * llama_new_context_with_model_internal(
 #endif
 
     return ctx;
-}
-
-struct llama_context * llama_new_context_with_model(
-    struct llama_model * model,
-    struct llama_context_params params
-) {
-    try {
-        return llama_new_context_with_model_internal(model, params);
-    } catch (const std::exception & err) {
-        LLAMA_LOG_ERROR("%s: failed to init context: %s\n", __func__, err.what());
-        return nullptr;
-    }
 }
 
 void llama_free(struct llama_context * ctx) {

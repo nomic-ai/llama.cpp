@@ -1551,7 +1551,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched);
 }
 
-void ggml_backend_sched_init_measure(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
+bool ggml_backend_sched_init_measure(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
     GGML_ASSERT(ggml_tallocr_is_measure(sched->tallocs[0])); // can only be initialized once
 
     sched_split_graph(sched, measure_graph);
@@ -1561,10 +1561,15 @@ void ggml_backend_sched_init_measure(ggml_backend_sched_t sched, struct ggml_cgr
     for (int i = 0; i < sched->n_backends; i++) {
         size_t size = ggml_tallocr_max_size(sched->tallocs[i]);
         ggml_tallocr_free(sched->tallocs[i]);
-        sched->tallocs[i] = ggml_tallocr_new_from_buft(sched->bufts[i], size);
+        ggml_tallocr_t tallocr = ggml_tallocr_new_from_buft(sched->bufts[i], size);
+        sched->tallocs[i] = tallocr;
+        if (!tallocr) {
+            return false;
+        }
     }
 
     sched_reset(sched);
+    return true;
 }
 
 void ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {

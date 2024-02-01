@@ -284,6 +284,9 @@ ggml_tallocr_t ggml_tallocr_new_measure_from_backend(struct ggml_backend * backe
 ggml_tallocr_t ggml_tallocr_new_from_buft(struct ggml_backend_buffer_type * buft, size_t size) {
     // create a backend buffer to get the correct tensor allocation sizes
     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
+    if (!buffer) {
+        return NULL;
+    }
     ggml_tallocr_t alloc = ggml_tallocr_new_from_buffer(buffer);
     alloc->buffer_owned = true;
     return alloc;
