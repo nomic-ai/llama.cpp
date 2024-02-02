@@ -207,12 +207,6 @@ std::vector<llama_token> llama_tokenize(
                         bool   add_bos,
                         bool   special = false);
 
-// tokenizes a token into a piece
-// should work similar to Python's `tokenizer.id_to_piece`
-std::string llama_token_to_piece(
-        const struct llama_context * ctx,
-                       llama_token   token);
-
 // TODO: these should be moved in llama.h C-style API under single `llama_detokenize` function
 //       that takes into account the tokenizer type and decides how to handle the leading space
 //
