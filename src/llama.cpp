@@ -8912,6 +8912,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #ifdef GGML_USE_KOMPUTE
         if (params.n_gpu_layers > 0 && (
             !(model.arch == LLM_ARCH_LLAMA || model.arch == LLM_ARCH_FALCON)
+            || model.hparams.n_expert > 0
             || !(
                 model.ftype == LLAMA_FTYPE_ALL_F32 ||
                 model.ftype == LLAMA_FTYPE_MOSTLY_F16 ||
