@@ -304,8 +304,10 @@ static std::list<ggml_vk_device_cpp> ggml_vk_available_devices_internal(size_t m
         }
         physical_device.getProperties2(&dev_props2);
 
-        if (subgroup_props.subgroupSize < 32)
+        if (subgroup_props.subgroupSize < 32) {
+            std::cerr << __func__ << ": skipping device " i << ": need subgroupSize>=32, have " << subgroup_props.subgroupSize << "\n";
             continue;
+        }
 
         std::string name(dev_props.deviceName);
         size_t n_idx = ++count_by_name[name];
@@ -352,6 +354,7 @@ ggml_vk_device * ggml_vk_available_devices(size_t memoryRequired, size_t * count
     auto devices = ggml_vk_available_devices_internal(memoryRequired);
     *count = devices.size();
     if (devices.empty()) {
+        std::cerr << __func__ << ": ggml_vk_available_devices_internal returned no devices\n";
         return nullptr;
     }
 
