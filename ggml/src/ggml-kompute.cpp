@@ -241,14 +241,18 @@ static std::list<ggml_vk_device_cpp> ggml_vk_available_devices_internal(size_t m
         const auto & physical_device = physical_devices[i];
 
         VkPhysicalDeviceProperties dev_props = physical_device.getProperties();
-        VkPhysicalDeviceMemoryProperties memoryProperties = physical_device.getMemoryProperties();
         const uint32_t major = VK_VERSION_MAJOR(dev_props.apiVersion);
         const uint32_t minor = VK_VERSION_MINOR(dev_props.apiVersion);
         if (major < 1 || minor < 2)
             continue;
 
+        if (dev_props.vendorID == 0x8086)
+            continue; // Intel GPUs not supported
+
         if (!ggml_vk_checkPhysicalDeviceFeatures(physical_device))
             continue;
+
+        VkPhysicalDeviceMemoryProperties memoryProperties = physical_device.getMemoryProperties();
 
         size_t heapSize = 0;
         for (uint32_t j = 0; j < memoryProperties.memoryHeapCount; ++j) {
