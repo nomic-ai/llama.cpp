@@ -622,12 +622,12 @@ const std::shared_ptr<kp::Tensor> ggml_vk_get_tensor_slice(const struct ggml_ten
 
     // Create a tensor whose memory will be composed of our buffers at the correct offset
     return komputeManager()->tensor(
-        t->data + offset,
+        reinterpret_cast<char *>(t->data) + offset,
         nbytes / elsz, nbytes,
         kp::Tensor::TensorDataTypes::eFloat,
         res->primaryMemory, res->primaryBuffer,
         res->stagingMemory, res->stagingBuffer,
-        tensor_offset);
+        tensor_offset + offset);
 }
 
 static std::vector<uint32_t> getSpirvShader(const unsigned char* rawData, size_t size) {
