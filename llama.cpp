@@ -10850,7 +10850,7 @@ static void llama_copy_state_data_internal(struct llama_context * ctx, llama_dat
         data_ctx->write(&kv_size,     sizeof(kv_size));
         data_ctx->write(&kv_used,     sizeof(kv_used));
 
-        if (kv_buf_size) {
+        if (kv_buf_size && kv_head) {
             const size_t elt_size = ggml_element_size(kv_self.k_l[0]);
 
             std::vector<uint8_t> tmp_buf;
@@ -10961,9 +10961,9 @@ size_t llama_set_state_data(struct llama_context * ctx, uint8_t * src) {
         memcpy(&kv_size,     inp, sizeof(kv_size));     inp += sizeof(kv_size);
         memcpy(&kv_used,     inp, sizeof(kv_used));     inp += sizeof(kv_used);
 
-        if (kv_buf_size) {
-            GGML_ASSERT(kv_self.total_size() == kv_buf_size);
+        GGML_ASSERT(kv_self.total_size() == kv_buf_size);
 
+        if (kv_buf_size && kv_head) {
             const size_t elt_size = ggml_element_size(kv_self.k_l[0]);
 
             for (int il = 0; il < (int) n_layer; ++il) {
