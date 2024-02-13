@@ -63,6 +63,8 @@
 
 typedef ggml_fp16_t half;
 
+static const std::shared_ptr<kp::Tensor> nullTensor = nullptr;
+
 static std::string ggml_kompute_format_name(int device) {
     return "Kompute" + std::to_string(device);
 }
@@ -586,31 +588,47 @@ ggml_vk_memory * ggml_vk_find_tensor(const struct ggml_tensor * t, uint64_t & of
 }
 
 static
-const std::shared_ptr<kp::Tensor> ggml_vk_get_tensor(const struct ggml_tensor * t, uint32_t * alignedOffset = nullptr) {
-    uint64_t originalOffset = 0;
-    auto * res = ggml_vk_find_tensor(t, originalOffset);
+const std::shared_ptr<kp::Tensor> ggml_vk_get_tensor_aligned(const struct ggml_tensor * t, uint32_t * aligned_offset) {
+    uint64_t original_offset = 0;
+    auto * res = ggml_vk_find_tensor(t, original_offset);
     if (!res) {
-        static std::shared_ptr<kp::Tensor> nullTensor = nullptr;
         return nullTensor;
     }
 
     // Create a tensor whose memory will be composed of our buffers at the correct offset
-    const size_t nelements = ggml_nelements(t);
     size_t nbytes = ggml_nbytes(t);
-
-    size_t vulkanOffset = ggml_vk_aligned_offset(t->buffer, originalOffset);
-    if (alignedOffset) {
-        *alignedOffset = originalOffset - vulkanOffset;
-        nbytes += *alignedOffset;
-    }
+    size_t vulkan_offset = ggml_vk_aligned_offset(t->buffer, original_offset);
+    *aligned_offset = original_offset - vulkan_offset;
+    nbytes += *aligned_offset;
 
     return komputeManager()->tensor(
         t->data,
-        nelements,
-        nbytes, kp::Tensor::TensorDataTypes::eFloat,
+        ggml_nelements(t), nbytes,
+        kp::Tensor::TensorDataTypes::eFloat,
         res->primaryMemory, res->primaryBuffer,
         res->stagingMemory, res->stagingBuffer,
-        vulkanOffset);
+        vulkan_offset);
+}
+
+static
+const std::shared_ptr<kp::Tensor> ggml_vk_get_tensor_slice(const struct ggml_tensor * t, size_t offset, size_t nbytes) {
+    uint64_t tensor_offset = 0;
+    auto * res = ggml_vk_find_tensor(t, tensor_offset);
+    if (!res) {
+        return nullTensor;
+    }
+
+    size_t elsz = ggml_element_size(t);
+    GGML_ASSERT(nbytes % elsz == 0);
+
+    // Create a tensor whose memory will be composed of our buffers at the correct offset
+    return komputeManager()->tensor(
+        reinterpret_cast<char *>(t->data) + offset,
+        nbytes / elsz, nbytes,
+        kp::Tensor::TensorDataTypes::eFloat,
+        res->primaryMemory, res->primaryBuffer,
+        res->stagingMemory, res->stagingBuffer,
+        tensor_offset + offset);
 }
 
 static std::vector<uint32_t> getSpirvShader(const unsigned char* rawData, size_t size) {
@@ -1561,13 +1579,12 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
             const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
             const enum ggml_type dstt = dst ? dst->type : GGML_TYPE_COUNT;
 
-            const static std::shared_ptr<kp::Tensor> nullTensor = nullptr;
             uint32_t off_src0 = 0;
             uint32_t off_src1 = 0;
             uint32_t off_dst  = 0;
-            const std::shared_ptr<kp::Tensor>& id_src0 = src0 ? ggml_vk_get_tensor(src0, &off_src0) : nullTensor;
-            const std::shared_ptr<kp::Tensor>& id_src1 = src1 ? ggml_vk_get_tensor(src1, &off_src1) : nullTensor;
-            const std::shared_ptr<kp::Tensor>& id_dst  = dst  ? ggml_vk_get_tensor(dst,  &off_dst)  : nullTensor;
+            const std::shared_ptr<kp::Tensor>& id_src0 = src0 ? ggml_vk_get_tensor_aligned(src0, &off_src0) : nullTensor;
+            const std::shared_ptr<kp::Tensor>& id_src1 = src1 ? ggml_vk_get_tensor_aligned(src1, &off_src1) : nullTensor;
+            const std::shared_ptr<kp::Tensor>& id_dst  = dst  ? ggml_vk_get_tensor_aligned(dst,  &off_dst)  : nullTensor;
 
             switch (dst->op) {
                 case GGML_OP_ADD:
@@ -1900,7 +1917,7 @@ static void * ggml_backend_kompute_buffer_get_base(ggml_backend_buffer_t buffer)
 static void ggml_backend_kompute_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     GGML_UNUSED(buffer);
 
-    const auto res = ggml_vk_get_tensor(tensor);
+    const auto res = ggml_vk_get_tensor_slice(tensor, offset, size);
     GGML_ASSERT(res);
 
     memcpy((char *)tensor->data + offset, data, size);
@@ -1911,7 +1928,7 @@ static void ggml_backend_kompute_buffer_set_tensor(ggml_backend_buffer_t buffer,
 static void ggml_backend_kompute_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_UNUSED(buffer);
 
-    const auto res = ggml_vk_get_tensor(tensor);
+    const auto res = ggml_vk_get_tensor_slice(tensor, offset, size);
     GGML_ASSERT(res);
 
     komputeManager()->sequence()->eval<kp::OpTensorSyncLocal>({res});
