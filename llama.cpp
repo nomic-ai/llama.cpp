@@ -9552,11 +9552,13 @@ static std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & 
                         //  and passing 'add space prefix' as bool argument
                         //
                         auto raw_text = fragment.raw_text.substr(fragment.offset, fragment.length);
+#if 0
                         if (&fragment == &fragment_buffer.front()) {
                             if (vocab.add_space_prefix) {
                                 raw_text = " " + raw_text; // prefix with space if the first token is not special
                             }
                         }
+#endif
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", raw_text.length(), fragment.offset, fragment.length, raw_text.c_str());
