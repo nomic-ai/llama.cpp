@@ -6951,6 +6951,7 @@ static bool llm_load_tensors(
         model.buft_layer[i] = llama_default_buffer_type_cpu(true);
     }
 
+#ifndef GGML_USE_KOMPUTE
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
         // calculate the split points
         int device_count = llama_get_device_count(model);
@@ -6988,7 +6989,9 @@ static bool llm_load_tensors(
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
-    } else {
+    } else
+#endif
+    {
         ggml_backend_buffer_type_t split_buft;
         if (split_mode == LLAMA_SPLIT_MODE_ROW) {
             split_buft = llama_default_buffer_type_split(model, main_gpu, tensor_split);
