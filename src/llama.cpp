@@ -8875,6 +8875,7 @@ static bool llm_load_tensors(
     return true;
 }
 
+#ifdef GGML_USE_KOMPUTE
 static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
     LLM_ARCH_LLAMA,
     LLM_ARCH_FALCON,
@@ -8898,6 +8899,7 @@ static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
     LLM_ARCH_MINICPM,
     LLM_ARCH_GEMMA,
 };
+#endif
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
