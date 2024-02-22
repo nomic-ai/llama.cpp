@@ -7721,6 +7721,30 @@ static bool llm_load_tensors(
     return true;
 }
 
+static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
+    LLM_ARCH_LLAMA,
+    LLM_ARCH_FALCON,
+    LLM_ARCH_BAICHUAN,
+    LLM_ARCH_GPT2,
+    // LLM_ARCH_MPT, -- needs GGML_OP_ALIBI
+    LLM_ARCH_STARCODER,
+    // LLM_ARCH_PERSIMMON, -- needs GGML_OP_CONCAT
+    // LLM_ARCH_REFACT, -- needs GGML_OP_ALIBI
+    LLM_ARCH_BERT,
+    LLM_ARCH_NOMIC_BERT,
+    // LLM_ARCH_BLOOM, -- needs GGML_OP_ALIBI
+    LLM_ARCH_STABLELM,
+    LLM_ARCH_QWEN,
+    LLM_ARCH_QWEN2,
+    LLM_ARCH_PHI2,
+    // LLM_ARCH_PLAMO, -- unable to test
+    LLM_ARCH_CODESHELL,
+    LLM_ARCH_ORION,
+    LLM_ARCH_INTERNLM2,
+    LLM_ARCH_MINICPM,
+    LLM_ARCH_GEMMA,
+};
+
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
@@ -7757,9 +7781,9 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         }
 
 #ifdef GGML_USE_KOMPUTE
+        auto & kparch = LLM_KOMPUTE_SUPPORTED_ARCHES;
         if (params.n_gpu_layers > 0 && (
-            !(model.arch == LLM_ARCH_FALCON || model.arch == LLM_ARCH_GEMMA || model.arch == LLM_ARCH_LLAMA ||
-              model.arch == LLM_ARCH_PHI2   || model.arch == LLM_ARCH_QWEN2 || model.arch == LLM_ARCH_STABLELM)
+            std::find(kparch, std::end(kparch), model.arch) == std::end(kparch)
             || model.hparams.n_expert > 0
             || !(
                 model.ftype == LLAMA_FTYPE_ALL_F32 ||
