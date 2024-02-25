@@ -6,6 +6,7 @@
 #extension GL_EXT_control_flow_attributes: enable
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_EXT_debug_printf : enable
+#extension GL_EXT_buffer_reference : require
 
 #define QK4_0 32
 #define QK4_1 32

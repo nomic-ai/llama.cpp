@@ -1,13 +1,78 @@
-void main() {
+layout(local_size_x_id = 0) in;
+layout(local_size_y = 1) in;
+layout(local_size_z = 1) in;
+
+#ifdef MUL_MAT_ID
+layout (binding = 0) readonly buffer tensorInId { int32_t inId[]; };
+#else
+layout (binding = 0, buffer_reference) readonly buffer tensorInA { uint8_t data[]; } inA;
+#endif
+
+layout (binding = 1) readonly buffer tensorInB { float inB[]; };
+layout (binding = 2) writeonly buffer tensorOut { float out_[]; };
+
+#ifdef MUL_MAT_ID
+layout (binding = 3, buffer_reference) readonly buffer tensorInA { uint8_t data[]; } inA[8];
+#endif
+
+layout (push_constant) uniform parameter {
+#ifdef MUL_MAT_ID
+    uint inIdOff;
+    uint inBOff;
+    uint outOff;
+    uint inAOff[8];
+    uint nbi1;
+#else
+    uint inAOff;
+    uint inBOff;
+    uint outOff;
+#endif
+    int  ne00;
+    int  ne01;
+    int  ne02;
+    int  ne10;
+    int  ne12;
+    int  ne0;
+    int  ne1;
+    uint r2;
+    uint r3;
+#ifdef MUL_MAT_ID
+    uint idx;
+#endif
+} pcs;
+
+
+float block_q4_0_dot_y(tensorInA inA, uint inAOff, uint block_index, uint yb, uint il) {
+    vec2 acc = vec2(0.0, 0.0);
+    const uint index = block_index * SIZE_OF_BLOCK + inAOff;
+    float d = float(u8BufToFloat16(inA, index));
+    float sumy = 0.0f;
+    for (int i = 0; i < BLOCKS_IN_QUANT/4; i+=2) {
+        const uint16_t b = u8BufToU16(inA, index + 2 + il + i);
+
+        const float yl0 = inB[yb + i];
+        const float yl1 = inB[yb + i + 1];
+        const float yl8 = inB[yb + i + BLOCKS_IN_QUANT/2];
+        const float yl9 = inB[yb + i + BLOCKS_IN_QUANT/2 + 1];
+
+        sumy += yl0 + yl1 + yl8 + yl9;
+
+        acc[0] += yl0 * (b & 0x000F) + yl1 / 256.f * (b & 0x0F00);
+        acc[1] += yl8 / 16.f * (b & 0x00F0) + yl9 / 4096.f * (b & 0xF000);
+    }
+    return d * (sumy * -8.f + acc[0] + acc[1]);
+}
+
+void mul_vec_q_n_f32_impl(tensorInA inA, uint inAOff, uint inBOff, uint outOff, uvec3 wgid) {
     // NB: hack to make compatible with AMD GPUs that have a subgroup size of 64
     if (gl_SubgroupInvocationID > 31)
         return;
 
     const uint nb = uint(pcs.ne00/BLOCKS_IN_QUANT);
 
-    const uint r0 = gl_WorkGroupID.x;
-    const uint r1 = gl_WorkGroupID.y;
-    const uint im = gl_WorkGroupID.z;
+    const uint r0 = wgid.x;
+    const uint r1 = wgid.y;
+    const uint im = wgid.z;
 
     const uint first_row = (r0 * gl_NumSubgroups + gl_SubgroupID) * N_ROWS;
 
@@ -17,7 +82,7 @@ void main() {
     const uint offset0 = first_row * nb + (i12/pcs.r2)*(nb*pcs.ne01) + (i13/pcs.r3)*(nb*pcs.ne01*pcs.ne02);
 
     const uint x = offset0; // Based from inA without base offset
-    const uint y = r1*uint(pcs.ne10)+im*pcs.ne00*pcs.ne1+pcs.inBOff; // Based from inB
+    const uint y = r1*uint(pcs.ne10)+im*pcs.ne00*pcs.ne1+inBOff; // Based from inB
 
     float sumf[N_ROWS] = {0.0f, 0.0f, 0.0f, 0.0f};
 
@@ -45,4 +110,26 @@ void main() {
             out_[r1*pcs.ne0 + im*pcs.ne0*pcs.ne1 + first_row + row + pcs.outOff] = tot;
         }
     }
+}
+
+void main() {
+#ifdef MUL_MAT_ID
+    uvec3 wgid = gl_WorkGroupID;
+
+    const int64_t bid = wgid.z/(pcs.ne12*pcs.ne13);
+
+    wgid.z = wgid.z%(pcs.ne12*pcs.ne13);
+
+    const int32_t id = inId[pcs.idx + (bid*pcs.nbi1)/4];
+
+    return mul_vec_q_n_f32_impl(
+        inA[id],
+        pcs.inAOff[id],
+        pcs.inBOff + (bid*pcs.nb11)/4,
+        pcs.outOff + (bid*pcs.ne0)/4,
+        wgid
+    );
+#else
+    return mul_vec_q_n_f32_impl(inA, pcs.inAOff, pcs.inBOff, pcs.outOff, gl_WorkGroupID);
+#endif
 }
