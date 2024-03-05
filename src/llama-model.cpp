@@ -4021,3 +4021,11 @@ bool llama_model_is_recurrent(const struct llama_model * model) {
         default:              return false;
     }
 }
+
+const char * llama_model_name(const struct llama_model * model) {
+    return model->name.c_str();
+}
+
+const char * llama_model_arch(const struct llama_model * model) {
+    return llm_arch_name(model->arch);
+}
