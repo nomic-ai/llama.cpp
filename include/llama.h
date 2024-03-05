@@ -881,6 +881,12 @@ extern "C" {
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
     //
+    // Model Info
+    //
+    LLAMA_API const char * llama_model_name(const struct llama_model * model);
+    LLAMA_API const char * llama_model_arch(const struct llama_model * model);
+
+    //
     // Vocab
     //
 
