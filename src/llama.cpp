@@ -21133,6 +21133,14 @@ float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id
     return it->second.data();
 }
 
+const char * llama_model_name(const struct llama_model * model) {
+    return model->name.c_str();
+}
+
+const char * llama_model_arch(const struct llama_model * model) {
+    return LLM_ARCH_NAMES.at(model->arch);
+}
+
 const char * llama_token_get_text(const struct llama_model * model, llama_token token) {
     GGML_ASSERT(model->vocab.type != LLAMA_VOCAB_TYPE_NONE);
     return model->vocab.id_to_token[token].text.c_str();
