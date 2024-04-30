@@ -1400,14 +1400,15 @@ static void ggml_vk_instance_init() {
     memset(vk_instance.initialized, 0, sizeof(bool) * GGML_VK_MAX_DEVICES);
 
     size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
-        std::string devices(devices_env);
-        std::replace(devices.begin(), devices.end(), ',', ' ');
+        std::string dev_indices(devices_env);
+        std::replace(dev_indices.begin(), dev_indices.end(), ',', ' ');
 
-        std::stringstream ss(devices);
+        std::stringstream ss(dev_indices);
         size_t tmp;
         while (ss >> tmp) {
             if(tmp >= num_available_devices) {
@@ -1417,26 +1418,16 @@ static void ggml_vk_instance_init() {
             vk_instance.device_indices.push_back(tmp);
         }
     } else {
-        std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
-
         // Make sure at least one device exists
         if (devices.empty()) {
             std::cerr << "ggml_vulkan: Error: No devices found." << std::endl;
-            GGML_ASSERT(false);
+            throw std::runtime_error("No Vulkan devices found");
         }
 
-        // Default to using all dedicated GPUs
+        // Default to making all GPUs available
+        vk_instance.device_indices.reserve(devices.size());
         for (size_t i = 0; i < devices.size(); i++) {
-            vk::PhysicalDeviceProperties props = devices[i].getProperties();
-
-            if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-                vk_instance.device_indices.push_back(i);
-            }
-        }
-
-        // If no dedicated GPUs found, fall back to GPU 0
-        if (vk_instance.device_indices.empty()) {
-            vk_instance.device_indices.push_back(0);
+            vk_instance.device_indices.push_back(i);
         }
     }
 
