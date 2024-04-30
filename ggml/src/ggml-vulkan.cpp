@@ -2097,14 +2097,15 @@ static void ggml_vk_instance_init() {
     vk_instance.instance = vk::createInstance(instance_create_info);
 
     size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
-        std::string devices(devices_env);
-        std::replace(devices.begin(), devices.end(), ',', ' ');
+        std::string dev_indices(devices_env);
+        std::replace(dev_indices.begin(), dev_indices.end(), ',', ' ');
 
-        std::stringstream ss(devices);
+        std::stringstream ss(dev_indices);
         size_t tmp;
         while (ss >> tmp) {
             if(tmp >= num_available_devices) {
@@ -2114,15 +2115,14 @@ static void ggml_vk_instance_init() {
             vk_instance.device_indices.push_back(tmp);
         }
     } else {
-        std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
-
         // Make sure at least one device exists
         if (devices.empty()) {
             std::cerr << "ggml_vulkan: Error: No devices found." << std::endl;
-            GGML_ABORT("fatal error");
+            throw std::runtime_error("No Vulkan devices found");
         }
 
-        // Default to using all dedicated GPUs
+        // Default to making all GPUs available
+        vk_instance.device_indices.reserve(devices.size());
         for (size_t i = 0; i < devices.size(); i++) {
             vk::PhysicalDeviceProperties2 new_props;
             vk::PhysicalDeviceDriverProperties new_driver;
@@ -2131,79 +2131,72 @@ static void ggml_vk_instance_init() {
             new_driver.pNext = &new_id;
             devices[i].getProperties2(&new_props);
 
-            if (new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-                // Check if there are two physical devices corresponding to the same GPU
-                auto old_device = std::find_if(
-                    vk_instance.device_indices.begin(),
-                    vk_instance.device_indices.end(),
-                    [&devices, &new_id](const size_t k){
-                        vk::PhysicalDeviceProperties2 old_props;
-                        vk::PhysicalDeviceIDProperties old_id;
-                        old_props.pNext = &old_id;
-                        devices[k].getProperties2(&old_props);
-                        return std::equal(std::begin(old_id.deviceUUID), std::end(old_id.deviceUUID), std::begin(new_id.deviceUUID));
-                    }
-                );
-                if (old_device == vk_instance.device_indices.end()) {
-                    vk_instance.device_indices.push_back(i);
-                } else {
-                    // There can be two physical devices corresponding to the same GPU if there are 2 different drivers
-                    // This can cause error when splitting layers aross the devices, need to keep only 1
-                    VK_LOG_DEBUG("Device " << i << " and device " << *old_device << " have the same deviceUUID");
-
+            // Check if there are two physical devices corresponding to the same GPU
+            auto old_device = std::find_if(
+                vk_instance.device_indices.begin(),
+                vk_instance.device_indices.end(),
+                [&devices, &new_id](const size_t k){
                     vk::PhysicalDeviceProperties2 old_props;
-                    vk::PhysicalDeviceDriverProperties old_driver;
-                    old_props.pNext = &old_driver;
-                    devices[*old_device].getProperties2(&old_props);
+                    vk::PhysicalDeviceIDProperties old_id;
+                    old_props.pNext = &old_id;
+                    devices[k].getProperties2(&old_props);
+                    return std::equal(std::begin(old_id.deviceUUID), std::end(old_id.deviceUUID), std::begin(new_id.deviceUUID));
+                }
+            );
+            if (old_device == vk_instance.device_indices.end()) {
+                vk_instance.device_indices.push_back(i);
+            } else {
+                // There can be two physical devices corresponding to the same GPU if there are 2 different drivers
+                // This can cause error when splitting layers aross the devices, need to keep only 1
+                VK_LOG_DEBUG("Device " << i << " and device " << *old_device << " have the same deviceUUID");
 
-                    std::map<vk::DriverId, int> driver_priorities {};
-                    int old_priority = std::numeric_limits<int>::max();
-                    int new_priority = std::numeric_limits<int>::max();
+                vk::PhysicalDeviceProperties2 old_props;
+                vk::PhysicalDeviceDriverProperties old_driver;
+                old_props.pNext = &old_driver;
+                devices[*old_device].getProperties2(&old_props);
 
-                    // Check https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDriverId.html for the list of driver id
-                    // Smaller number -> higher priority
-                    switch (old_props.properties.vendorID) {
-                        case VK_VENDOR_ID_AMD:
-                            driver_priorities[vk::DriverId::eMesaRadv] = 1;
-                            driver_priorities[vk::DriverId::eAmdOpenSource] = 2;
-                            driver_priorities[vk::DriverId::eAmdProprietary] = 3;
-                            break;
-                        case VK_VENDOR_ID_INTEL:
-                            driver_priorities[vk::DriverId::eIntelOpenSourceMESA] = 1;
-                            driver_priorities[vk::DriverId::eIntelProprietaryWindows] = 2;
-                            break;
-                        case VK_VENDOR_ID_NVIDIA:
-                            driver_priorities[vk::DriverId::eNvidiaProprietary] = 1;
+                std::map<vk::DriverId, int> driver_priorities {};
+                int old_priority = std::numeric_limits<int>::max();
+                int new_priority = std::numeric_limits<int>::max();
+
+                // Check https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDriverId.html for the list of driver id
+                // Smaller number -> higher priority
+                switch (old_props.properties.vendorID) {
+                    case VK_VENDOR_ID_AMD:
+                        driver_priorities[vk::DriverId::eMesaRadv] = 1;
+                        driver_priorities[vk::DriverId::eAmdOpenSource] = 2;
+                        driver_priorities[vk::DriverId::eAmdProprietary] = 3;
+                        break;
+                    case VK_VENDOR_ID_INTEL:
+                        driver_priorities[vk::DriverId::eIntelOpenSourceMESA] = 1;
+                        driver_priorities[vk::DriverId::eIntelProprietaryWindows] = 2;
+                        break;
+                    case VK_VENDOR_ID_NVIDIA:
+                        driver_priorities[vk::DriverId::eNvidiaProprietary] = 1;
 #if defined(VK_API_VERSION_1_3) && VK_HEADER_VERSION >= 235
-                            driver_priorities[vk::DriverId::eMesaNvk] = 2;
+                        driver_priorities[vk::DriverId::eMesaNvk] = 2;
 #endif
-                            break;
-                    }
+                        break;
+                }
 
-                    if (driver_priorities.count(old_driver.driverID)) {
-                        old_priority = driver_priorities[old_driver.driverID];
-                    }
-                    if (driver_priorities.count(new_driver.driverID)) {
-                        new_priority = driver_priorities[new_driver.driverID];
-                    }
+                if (driver_priorities.count(old_driver.driverID)) {
+                    old_priority = driver_priorities[old_driver.driverID];
+                }
+                if (driver_priorities.count(new_driver.driverID)) {
+                    new_priority = driver_priorities[new_driver.driverID];
+                }
 
-                    if (new_priority < old_priority) {
-                        auto r = std::remove(vk_instance.device_indices.begin(), vk_instance.device_indices.end(), *old_device);
-                        vk_instance.device_indices.erase(r, vk_instance.device_indices.end());
-                        vk_instance.device_indices.push_back(i);
+                if (new_priority < old_priority) {
+                    auto r = std::remove(vk_instance.device_indices.begin(), vk_instance.device_indices.end(), *old_device);
+                    vk_instance.device_indices.erase(r, vk_instance.device_indices.end());
+                    vk_instance.device_indices.push_back(i);
 
-                        VK_LOG_DEBUG("Prioritize device " << i << " driver " << new_driver.driverName << " over device " << *old_device << " driver " << old_driver.driverName);
-                    }
-                    else {
-                        VK_LOG_DEBUG("Prioritize device " << *old_device << " driver " << old_driver.driverName << " over device " << i << " driver " << new_driver.driverName << std::endl);
-                    }
+                    VK_LOG_DEBUG("Prioritize device " << i << " driver " << new_driver.driverName << " over device " << *old_device << " driver " << old_driver.driverName);
+                }
+                else {
+                    VK_LOG_DEBUG("Prioritize device " << *old_device << " driver " << old_driver.driverName << " over device " << i << " driver " << new_driver.driverName << std::endl);
                 }
             }
-        }
-
-        // If no dedicated GPUs found, fall back to GPU 0
-        if (vk_instance.device_indices.empty()) {
-            vk_instance.device_indices.push_back(0);
         }
     }
 
