@@ -2043,7 +2043,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
-void ggml_vk_instance_init() {
+static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
         return;
     }
