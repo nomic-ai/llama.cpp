@@ -10,6 +10,17 @@ extern "C" {
 #define GGML_VK_NAME "Vulkan"
 #define GGML_VK_MAX_DEVICES 16
 
+struct ggml_vk_device {
+    uint32_t index;
+    int type; // same as VkPhysicalDeviceType
+    uint64_t heapSize;
+    const char * name;
+    uint32_t vendorID;
+};
+
+GGML_API GGML_CALL struct ggml_vk_device * ggml_vk_available_devices(size_t * count);
+GGML_API GGML_CALL void                    ggml_vk_device_destroy(ggml_vk_device * device);
+
 // backend API
 GGML_API GGML_CALL ggml_backend_t ggml_backend_vk_init(size_t dev_num);
 

@@ -10,18 +10,19 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
-#include <tuple>
-#include <vector>
-#include <sstream>
-#include <utility>
-#include <memory>
 #include <limits>
+#include <list>
 #include <map>
 #include <unordered_map>
+#include <memory>
 #include <memory>
 #include <mutex>
 #include <future>
 #include <thread>
+#include <sstream>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -6155,6 +6156,85 @@ GGML_CALL static void ggml_vk_get_device_description(int device, char * descript
     devices[device].getProperties(&props);
 
     snprintf(description, description_size, "%s", props.deviceName.data());
+}
+
+static std::list<ggml_vk_device> ggml_vk_available_devices_internal() {
+    std::list<ggml_vk_device> results;
+    ggml_vk_instance_init();
+
+    std::vector<vk::PhysicalDevice> physical_devices = vk_instance.instance.enumeratePhysicalDevices();
+
+    std::unordered_map<std::string, size_t> count_by_name;
+
+    for (uint32_t dev_idx = 0; dev_idx < physical_devices.size(); dev_idx++) {
+        const auto & physical_device = physical_devices[dev_idx];
+
+        vk::PhysicalDeviceProperties dev_props;
+        physical_device.getProperties(&dev_props);
+
+        vk::PhysicalDeviceMemoryProperties mem_props;
+        physical_device.getMemoryProperties(&mem_props);
+
+        vk::DeviceSize heapSize = 0;
+        for (uint32_t i = 0; i < mem_props.memoryHeapCount; i++) {
+            const auto & heap = mem_props.memoryHeaps[i];
+            if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+                heapSize = heap.size;
+                break;
+            }
+        }
+
+        std::string name(dev_props.deviceName.data());
+        size_t n_idx = ++count_by_name[name];
+        if (n_idx > 1) {
+            name += " (" + std::to_string(n_idx) + ")";
+        }
+
+        results.push_back({
+            /* index    = */ dev_idx,
+            /* type     = */ VkPhysicalDeviceType(dev_props.deviceType),
+            /* heapSize = */ heapSize,
+            /* name     = */ strdup(name.c_str()),
+            /* vendor   = */ dev_props.vendorID
+        });
+    }
+
+    // std::list::sort is guaranteed to be stable
+    results.sort(
+        [](const ggml_vk_device & a, const ggml_vk_device & b) -> bool {
+            if (a.type != b.type) {
+                if (a.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) return true;
+                if (b.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) return false;
+
+                if (a.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) return true;
+                if (b.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) return false;
+            }
+            return a.heapSize > b.heapSize; // descending
+        }
+    );
+
+    return results;
+}
+
+// public API returns a C-style array
+ggml_vk_device * ggml_vk_available_devices(size_t * count) {
+    auto devices = ggml_vk_available_devices_internal();
+    *count = devices.size();
+    if (devices.empty()) {
+        return nullptr;
+    }
+
+    size_t nbytes = sizeof(ggml_vk_device) * devices.size();
+    auto * arr = static_cast<ggml_vk_device *>(malloc(nbytes));
+
+    int i = 0;
+    for (auto & d : devices) { arr[i++] = d; }
+
+    return arr;
+}
+
+void ggml_vk_device_destroy(ggml_vk_device * device) {
+    free(const_cast<char *>(device->name));
 }
 
 // backend interface
