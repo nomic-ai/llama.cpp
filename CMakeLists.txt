@@ -729,6 +729,7 @@ if (LLAMA_KOMPUTE)
             kompute-shaders/op_mul_mat_q4_0.comp
             kompute-shaders/op_mul_mat_q4_1.comp
             kompute-shaders/op_mul_mat_q6_k.comp
+            kompute-shaders/op_getrows_f32.comp
             kompute-shaders/op_getrows_f16.comp
             kompute-shaders/op_getrows_q4_0.comp
             kompute-shaders/op_getrows_q4_1.comp
@@ -761,6 +762,7 @@ if (LLAMA_KOMPUTE)
             shaderop_mul_mat_q4_0.h
             shaderop_mul_mat_q4_1.h
             shaderop_mul_mat_q6_k.h
+            shaderop_getrows_f32.h
             shaderop_getrows_f16.h
             shaderop_getrows_q4_0.h
             shaderop_getrows_q4_1.h
