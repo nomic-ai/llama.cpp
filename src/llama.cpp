@@ -3321,6 +3321,10 @@ struct llama_sbatch {
     }
 };
 
+#ifdef GGML_USE_VULKAN
+static bool vulkan_backend_initialized[GGML_VK_MAX_DEVICES] = {};
+#endif
+
 struct llama_context {
     llama_context(const llama_model & model)
         : model(model)
@@ -3331,6 +3335,11 @@ struct llama_context {
         ggml_backend_sched_free(sched);
 
         for (ggml_backend_t backend : backends) {
+#ifdef GGML_USE_VULKAN
+            if (ggml_backend_is_vk(backend)) {
+                vulkan_backend_initialized[ggml_backend_vk_idx(backend)] = false;
+            }
+#endif
             ggml_backend_free(backend);
         }
 
@@ -19383,6 +19392,8 @@ struct llama_context * llama_new_context_with_model(
             return nullptr;
         }
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
+            GGML_ASSERT(!vulkan_backend_initialized[model->main_gpu]);
+            vulkan_backend_initialized[model->main_gpu] = true;
             ggml_backend_t backend = ggml_backend_vk_init(model->main_gpu);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize Vulkan backend\n", __func__);
@@ -19392,6 +19403,8 @@ struct llama_context * llama_new_context_with_model(
             ctx->backends.push_back(backend);
         } else {
             for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
+                GGML_ASSERT(!vulkan_backend_initialized[device]);
+                vulkan_backend_initialized[device] = true;
                 ggml_backend_t backend = ggml_backend_vk_init(device);
                 if (backend == nullptr) {
                     LLAMA_LOG_ERROR("%s: failed to initialize Vulkan%d backend\n", __func__, device);
