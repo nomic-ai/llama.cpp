@@ -5224,6 +5224,11 @@ GGML_CALL static bool ggml_backend_buffer_is_vk(ggml_backend_buffer_t buffer) {
     return buffer->iface.get_name == ggml_backend_vk_buffer_get_name;
 }
 
+size_t ggml_backend_vk_idx(ggml_backend_t backend) {
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    return ctx->idx;
+}
+
 GGML_CALL static void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 #ifdef GGML_VULKAN_DEBUG
     std::cerr << "ggml_backend_vk_buffer_free_buffer()" << std::endl;
