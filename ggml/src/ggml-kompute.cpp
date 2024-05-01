@@ -325,7 +325,7 @@ static std::list<ggml_vk_device_cpp> ggml_vk_available_devices_internal(size_t m
                 if (lhs.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) return true;
                 if (rhs.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) return false;
             }
-            return lhs.heapSize < rhs.heapSize;
+            return lhs.heapSize > rhs.heapSize; // most VRAM first
         }
     );
 
