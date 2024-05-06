@@ -39,19 +39,20 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cfloat>
 #include <cinttypes>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
-#include <float.h>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <stdlib.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -205,6 +206,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
         GGML_CUDA_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
+
+        info.devices[id].total_vram = prop.totalGlobalMem;
+        auto &name_dst = info.devices[id].name;
+        strncpy(name_dst, prop.name, sizeof name_dst);
+        name_dst[sizeof name_dst - 1] = 0;
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
@@ -3215,4 +3221,58 @@ GGML_CALL int ggml_backend_cuda_reg_devices() {
         ggml_backend_register(name, ggml_backend_reg_cuda_init, ggml_backend_cuda_buffer_type(i), (void *) (intptr_t) i);
     }
     return device_count;
+}
+
+static std::list<ggml_cuda_device> ggml_cuda_available_devices_internal() {
+    std::list<ggml_cuda_device> results;
+
+    const auto & cuda_info = ggml_cuda_info();
+
+    std::unordered_map<std::string, size_t> count_by_name;
+
+    for (int dev_idx = 0; dev_idx < cuda_info.device_count; dev_idx++) {
+        const auto & device = cuda_info.devices[dev_idx];
+
+        std::string name(device.name);
+        size_t n_idx = ++count_by_name[name];
+        if (n_idx > 1) {
+            name += " (" + std::to_string(n_idx) + ")";
+        }
+
+        results.push_back({
+            /* index    = */ uint32_t(dev_idx),
+            /* heapSize = */ uint64_t(device.total_vram),
+            /* name     = */ strdup(name.c_str()),
+        });
+    }
+
+    // std::list::sort is guaranteed to be stable
+    results.sort(
+        [](const ggml_cuda_device & a, const ggml_cuda_device & b) -> bool {
+            return a.heapSize > b.heapSize; // descending
+        }
+    );
+
+    return results;
+}
+
+// public API returns a C-style array
+ggml_cuda_device * ggml_cuda_available_devices(size_t * count) {
+    auto devices = ggml_cuda_available_devices_internal();
+    *count = devices.size();
+    if (devices.empty()) {
+        return nullptr;
+    }
+
+    size_t nbytes = sizeof(ggml_cuda_device) * devices.size();
+    auto * arr = static_cast<ggml_cuda_device *>(malloc(nbytes));
+
+    int i = 0;
+    for (auto & d : devices) { arr[i++] = d; }
+
+    return arr;
+}
+
+void ggml_cuda_device_destroy(ggml_cuda_device * device) {
+    free(const_cast<char *>(device->name));
 }
