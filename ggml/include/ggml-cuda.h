@@ -3,6 +3,8 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#include <stddef.h>
+
 #ifdef GGML_USE_HIPBLAS
 #define GGML_CUDA_NAME "ROCm"
 #define GGML_CUBLAS_NAME "hipBLAS"
@@ -14,11 +16,20 @@
 #define GGML_CUBLAS_NAME "cuBLAS"
 #endif
 
+#define GGML_CUDA_MAX_DEVICES 16
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
 
-#define GGML_CUDA_MAX_DEVICES       16
+struct ggml_cuda_device {
+    uint32_t     index;
+    uint64_t     heapSize;
+    const char * name;
+};
+
+GGML_API GGML_CALL struct ggml_cuda_device * ggml_cuda_available_devices(size_t * count);
+GGML_API GGML_CALL void                      ggml_cuda_device_destroy(ggml_cuda_device * device);
 
 // backend API
 GGML_API GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device);
