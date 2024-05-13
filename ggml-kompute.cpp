@@ -127,6 +127,8 @@ void ggml_vk_device_destroy(ggml_vk_device * device) {
 }
 
 struct ggml_vk_device_cpp: ggml_vk_device {
+    ggml_vk_device_cpp() = default;
+
     ggml_vk_device_cpp(
         int index, int type, size_t heapSize, const char * name, const char * vendor, int subgroupSize,
         uint64_t bufferAlignment, uint64_t maxAlloc
@@ -135,7 +137,7 @@ struct ggml_vk_device_cpp: ggml_vk_device {
               /* index           = */ index,
               /* type            = */ type,
               /* heapSize        = */ heapSize,
-              /* name            = */ strdup(name),
+              /* name            = */ name ? strdup(name) : nullptr,
               /* vendor          = */ vendor,
               /* supgroupSize    = */ subgroupSize,
               /* bufferAlignment = */ bufferAlignment,
@@ -396,17 +398,15 @@ bool ggml_vk_has_device() {
     return komputeManager()->hasDevice();
 }
 
-ggml_vk_device ggml_vk_current_device() {
+static ggml_vk_device_cpp ggml_vk_current_device() {
     if (!komputeManager()->hasDevice())
-        return ggml_vk_device();
+        return ggml_vk_device_cpp();
 
     auto devices = ggml_vk_available_devices_internal(0);
     ggml_vk_filterByName(devices, komputeManager()->physicalDevice()->getProperties().deviceName.data());
-    GGML_ASSERT(!devices.empty());
 
-    ggml_vk_device device = devices.front();
-    devices.front().steal();
-    return device;
+    GGML_ASSERT(!devices.empty());
+    return devices.front();
 }
 
 static
