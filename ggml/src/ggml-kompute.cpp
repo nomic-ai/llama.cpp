@@ -387,6 +387,7 @@ bool ggml_vk_get_device(ggml_vk_device * device, size_t memoryRequired, const ch
         return false;
 
     *device = devices.front();
+    devices.front().steal();
     return true;
 }
 
