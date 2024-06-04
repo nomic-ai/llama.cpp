@@ -430,10 +430,6 @@ extern "C" {
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
 
-    LLAMA_API struct llama_model * llama_load_model_from_file_gpt4all(
-                             const char * path_model,
-            struct llama_model_params   * params);
-
     LLAMA_API struct llama_model * llama_load_model_from_file(
                              const char * path_model,
             struct llama_model_params     params);
@@ -510,6 +506,9 @@ extern "C" {
     // For encoder-decoder models, this function returns id of the token that must be provided
     // to the decoder to start generating output sequence. For other models, it returns -1.
     LLAMA_API llama_token llama_model_decoder_start_token(const struct llama_model * model);
+
+    // Returns true if the model is using the GPU/accelerator device
+    LLAMA_API bool llama_model_using_gpu(struct llama_model * model);
 
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
