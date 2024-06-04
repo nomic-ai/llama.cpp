@@ -2189,6 +2189,13 @@ struct llama_model {
     int main_gpu;
     int n_gpu_layers;
 
+#if defined(GGML_USE_METAL) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL) \
+        || defined(GGML_USE_CLBLAST) || defined(GGML_USE_KOMPUTE)
+    bool using_gpu = true;
+#else
+    bool using_gpu = false;
+#endif
+
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
@@ -4806,6 +4813,12 @@ static bool llm_load_tensors(
             // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
             split_buft = llama_default_buffer_type_offload(main_gpu);
         }
+#ifdef GGML_USE_KOMPUTE
+        // we can fall back to CPU buffer type in some cases
+        if (!strcmp(ggml_backend_buft_name(split_buft), "CPU")) {
+            model.using_gpu = false;
+        }
+#endif
         // assign the repeating layers
         for (int64_t i = i_gpu_start; i < n_layer; ++i) {
             model.buft_layer[i] = {
@@ -6143,7 +6156,7 @@ static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
 #endif
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
-static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
+static int llama_model_load(const std::string & fname, llama_model & model, const llama_model_params & params) {
     try {
         llama_model_loader ml(fname, params.use_mmap, params.check_tensors, params.kv_overrides);
 
@@ -6177,22 +6190,28 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             return 0;
         }
 
+        // NOTE: Metal and Kompute do no compute on the GPU with ngl=0, CUDA and Vulkan do
+        // TODO(cebtenzzre): What about other backends?
 #ifdef GGML_USE_KOMPUTE
         auto & kparch = LLM_KOMPUTE_SUPPORTED_ARCHES;
-        if (params.n_gpu_layers > 0 && (
+        if (!params.n_gpu_layers) {
+            model.using_gpu = false;
+        } else if (
             std::find(kparch, std::end(kparch), model.arch) == std::end(kparch)
             || model.hparams.n_expert > 0
             || !(
                 model.ftype == LLAMA_FTYPE_ALL_F32 ||
                 model.ftype == LLAMA_FTYPE_MOSTLY_F16 ||
-                model.ftype == LLAMA_FTYPE_MOSTLY_BF16 ||
                 model.ftype == LLAMA_FTYPE_MOSTLY_Q4_0 ||
                 model.ftype == LLAMA_FTYPE_MOSTLY_Q4_1
             )
-        )) {
-            // TODO(cebtenzzre): propagate this error outside of llama_load_model_from_file
+        ) {
             LLAMA_LOG_WARN("%s: disabling Kompute due to unsupported model arch or quantization\n", __func__);
-            params.n_gpu_layers = 0;
+            model.using_gpu = false;
+        }
+#elif defined(GGML_USE_METAL)
+        if (!params.n_gpu_layers) {
+            model.using_gpu = false;
         }
 #endif
 
@@ -15429,11 +15448,9 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
-struct llama_model * llama_load_model_from_file_gpt4all(
+struct llama_model * llama_load_model_from_file(
         const char * path_model,
-        struct llama_model_params * params_p) {
-    auto & params = *params_p;
-
+        struct llama_model_params params) {
     ggml_time_init();
 
     llama_model * model = new llama_model;
@@ -15468,10 +15485,6 @@ struct llama_model * llama_load_model_from_file_gpt4all(
     }
 
     return model;
-}
-
-struct llama_model * llama_load_model_from_file(const char * path_model, struct llama_model_params params) {
-    return llama_load_model_from_file_gpt4all(path_model, &params);
 }
 
 void llama_free_model(struct llama_model * model) {
@@ -15697,7 +15710,7 @@ struct llama_context * llama_new_context_with_model(
             }
         }
 #elif defined(GGML_USE_KOMPUTE)
-        if (model->n_gpu_layers > 0) {
+        if (model->using_gpu) {
             auto * backend = ggml_backend_kompute_init(model->main_gpu);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize Kompute backend\n", __func__);
@@ -16005,6 +16018,10 @@ struct ggml_tensor * llama_get_model_tensor(struct llama_model * model, const ch
         return nullptr;
     }
     return it->second;
+}
+
+bool llama_model_using_gpu(struct llama_model * model) {
+    return model->using_gpu;
 }
 
 uint32_t llama_model_quantize(
