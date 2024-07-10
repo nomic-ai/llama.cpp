@@ -7804,6 +7804,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, cons
             return 0;
         }
 
+        int n_gpu_layers = params.n_gpu_layers;
+
         // NOTE: Metal and Kompute do no compute on the GPU with ngl=0, CUDA and Vulkan do
         // TODO(cebtenzzre): What about other backends?
 #ifdef GGML_USE_KOMPUTE
@@ -7822,6 +7824,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, cons
         ) {
             LLAMA_LOG_WARN("%s: disabling Kompute due to unsupported model arch or quantization\n", __func__);
             model.using_gpu = false;
+            n_gpu_layers = 0;
         }
 #elif defined(GGML_USE_METAL)
         if (!params.n_gpu_layers) {
@@ -7830,7 +7833,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, cons
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.split_mode,  params.main_gpu, params.tensor_split, params.use_mlock,
+            ml, model, n_gpu_layers, params.split_mode,  params.main_gpu, params.tensor_split, params.use_mlock,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
