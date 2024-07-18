@@ -1588,9 +1588,9 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
             uint32_t off_src0 = 0;
             uint32_t off_src1 = 0;
             uint32_t off_dst  = 0;
-            const std::shared_ptr<kp::Tensor>& id_src0 = src0 ? ggml_vk_get_tensor_aligned(src0, &off_src0) : nullTensor;
-            const std::shared_ptr<kp::Tensor>& id_src1 = src1 ? ggml_vk_get_tensor_aligned(src1, &off_src1) : nullTensor;
-            const std::shared_ptr<kp::Tensor>& id_dst  = dst  ? ggml_vk_get_tensor_aligned(dst,  &off_dst)  : nullTensor;
+            std::shared_ptr<kp::Tensor> id_src0 = src0 ? ggml_vk_get_tensor_aligned(src0, &off_src0) : nullTensor;
+            std::shared_ptr<kp::Tensor> id_src1 = src1 ? ggml_vk_get_tensor_aligned(src1, &off_src1) : nullTensor;
+            std::shared_ptr<kp::Tensor> id_dst  = dst  ? ggml_vk_get_tensor_aligned(dst,  &off_dst)  : nullTensor;
 
             switch (dst->op) {
                 case GGML_OP_ADD:
