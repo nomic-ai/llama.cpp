@@ -567,6 +567,11 @@ static void ggml_vk_free_memory(ggml_vk_memory &memory)
           *memory.stagingMemory,
           (vk::Optional<const vk::AllocationCallbacks>)nullptr);
     }
+
+    delete memory.primaryMemory;
+    delete memory.primaryBuffer;
+    delete memory.stagingMemory;
+    delete memory.stagingBuffer;
 }
 
 static const char * ggml_backend_kompute_buffer_type_get_name(ggml_backend_buffer_type_t buft);
@@ -1996,15 +2001,20 @@ static ggml_backend_buffer_type_i ggml_backend_kompute_buffer_type_interface = {
 };
 
 ggml_backend_buffer_type_t ggml_backend_kompute_buffer_type(int device) {
+    // used only to prevent leaking context structs
+    static std::vector<std::unique_ptr<ggml_backend_kompute_buffer_type_context>> buft_contexts;
+
     static std::vector<ggml_backend_buffer_type> bufts = []() {
         std::vector<ggml_backend_buffer_type> vec;
         auto devices = ggml_vk_available_devices_internal(0);
         vec.reserve(devices.size());
 
         for (const auto & dev : devices) {
+            auto *ctx = new ggml_backend_kompute_buffer_type_context(dev.index, dev.bufferAlignment, dev.maxAlloc);
+            buft_contexts.emplace_back(ctx);
             vec.push_back({
                 /* .iface   = */ ggml_backend_kompute_buffer_type_interface,
-                /* .context = */ new ggml_backend_kompute_buffer_type_context(dev.index, dev.bufferAlignment, dev.maxAlloc)
+                /* .context = */ ctx,
             });
         }
         return vec;
