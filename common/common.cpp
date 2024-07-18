@@ -832,9 +832,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--main-gpu" || arg == "-mg") {
         CHECK_ARG
         params.main_gpu = std::stoi(argv[i]);
-#ifndef GGML_USE_CUDA_SYCL_VULKAN
+#if !defined(GGML_USE_CUDA_SYCL_VULKAN) || defined(GGML_USE_KOMPUTE)
         fprintf(stderr, "warning: llama.cpp was compiled without CUDA/SYCL/Vulkan. Setting the main GPU has no effect.\n");
-#endif // GGML_USE_CUDA_SYCL_VULKAN
+#endif // GGML_USE_CUDA_SYCL_VULKAN || GGML_USE_KOMPUTE
         return true;
     }
     if (arg == "--split-mode" || arg == "-sm") {
