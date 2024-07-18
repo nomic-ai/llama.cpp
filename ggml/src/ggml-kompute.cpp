@@ -85,26 +85,35 @@ struct ggml_kompute_context {
 static ggml_kompute_context *s_kompute_context = nullptr;
 
 class kompute_manager {
-    kp::Manager *s_mgr = nullptr;
+    std::unique_ptr<kp::Manager> s_mgr;
 
 public:
     kp::Manager *operator()() {
-        if (s_mgr && !s_mgr->hasInstance()) {
-            destroy();
+        if (!s_mgr || !s_mgr->hasInstance()) {
+            s_mgr.reset(new kp::Manager);
         }
-        if (!s_mgr) {
-            s_mgr = new kp::Manager;
-        }
-        return s_mgr;
+        return s_mgr.get();
     }
 
-    void destroy() {
-        delete s_mgr;
-        s_mgr = nullptr;
+    void cleanup() {
+        if (s_mgr) {
+            s_mgr->clear();
+        }
+    }
+
+    void freeDevice() {
+        if (s_mgr) {
+            s_mgr->destroy();
+        }
+    }
+
+    void freeInstance() {
+        s_mgr.reset();
     }
 };
 
 static kompute_manager komputeManager;
+static int global_device_ref = 0;
 
 struct ggml_vk_memory {
     void *data = nullptr;
@@ -1880,27 +1889,44 @@ struct ggml_backend_kompute_buffer_type_context {
 };
 
 static void ggml_backend_kompute_device_ref(ggml_backend_buffer_type_t buft) {
-    auto * ctx = static_cast<ggml_backend_kompute_buffer_type_context *>(buft->context);
+    static int s_cur_device = -1;
 
-    if (!ctx->device_ref) {
-        komputeManager()->initializeDevice(
+    auto * ctx = static_cast<ggml_backend_kompute_buffer_type_context *>(buft->context);
+    auto * mgr = komputeManager();
+
+    if (!ctx->device_ref && (!mgr->hasDevice() || s_cur_device != ctx->device)) {
+        assert(!global_device_ref);
+        if (mgr->hasDevice()) {
+            komputeManager.freeDevice();
+        }
+        mgr->initializeDevice(
             ctx->device, {}, {"VK_KHR_8bit_storage", "VK_KHR_16bit_storage", "VK_KHR_shader_non_semantic_info"}
         );
+        s_cur_device = ctx->device;
     }
 
-    assert(ggml_vk_has_device());
+    assert(mgr->hasDevice());
     ctx->device_ref++;
+    global_device_ref++;
 }
 
 static void ggml_backend_kompute_device_unref(ggml_backend_buffer_type_t buft) {
     auto * ctx = static_cast<ggml_backend_kompute_buffer_type_context *>(buft->context);
 
-    assert(ctx->device_ref > 0);
+    assert(ctx->device_ref   > 0);
+    assert(global_device_ref > 0);
 
     ctx->device_ref--;
+    global_device_ref--;
 
     if (!ctx->device_ref) {
-        komputeManager.destroy();
+        assert(!global_device_ref);
+        // free device memory
+        komputeManager.cleanup();
+        if (!s_kompute_context) {
+            // ggml_backend_kompute_free was previously called, we can now fully cleanup Vulkan
+            komputeManager.freeInstance();
+        }
     }
 }
 
@@ -2039,6 +2065,10 @@ static void ggml_backend_kompute_free(ggml_backend_t backend) {
     assert(ctx == s_kompute_context);
     s_kompute_context = nullptr;
     if (ctx != nullptr) {
+        if (!global_device_ref) {
+            // there are no more device refs, we can now fully cleanup Vulkan
+            komputeManager.freeInstance();
+        }
         delete ctx;
     }
 
