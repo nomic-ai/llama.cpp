@@ -2008,6 +2008,7 @@ static ggml_backend_buffer_t ggml_backend_kompute_buffer_type_alloc_buffer(ggml_
     ggml_backend_kompute_device_ref(buft);
     auto * ctx = new ggml_vk_memory(ggml_vk_allocate(size));
     if (!ctx->primaryMemory) {
+        ggml_backend_kompute_device_unref(buft);
         delete ctx;
         return nullptr; // allocation failed
     }
