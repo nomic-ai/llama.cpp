@@ -462,8 +462,11 @@ vk::Buffer *ggml_vk_allocate_buffer(size_t size) {
 
     vk::Buffer *vkBuffer = new vk::Buffer;
     vk::Result r = komputeManager()->device()->createBuffer(&bufferCreateInfo, nullptr, vkBuffer);
-    if (r != vk::Result::eSuccess)
+    if (r != vk::Result::eSuccess) {
         std::cerr << "Error allocating buffer " << vk::to_string(r) << std::endl;
+        delete vkBuffer;
+        return nullptr;
+    }
     return vkBuffer;
 }
 
@@ -521,56 +524,78 @@ static size_t ggml_vk_aligned_offset(ggml_backend_buffer_t buffer, size_t offset
     return (offset / minStorageBufferOffsetAlignment) * minStorageBufferOffsetAlignment;
 }
 
+static void ggml_vk_free_memory(ggml_vk_memory &memory);
+
 static ggml_vk_memory ggml_vk_allocate(size_t size) {
     ggml_vk_memory memory;
     bool isHostVisible = false;
     {
         memory.primaryBuffer = ggml_vk_allocate_buffer(size);
+        if (!memory.primaryBuffer)
+            goto error;
 
         vk::MemoryRequirements memoryRequirements = komputeManager()->device()->getBufferMemoryRequirements(*memory.primaryBuffer);
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
         memory.primaryMemory = ggml_vk_allocate(size, memoryPropertyFlags, memoryRequirements, &isHostVisible);
         if (!memory.primaryMemory)
-            return {};
+            goto error;
 
         komputeManager()->device()->bindBufferMemory(*memory.primaryBuffer, *memory.primaryMemory, 0);
         if (isHostVisible) {
             vk::Result r = komputeManager()->device()->mapMemory(*memory.primaryMemory, 0, size, vk::MemoryMapFlags(), &memory.data);
-            if (r != vk::Result::eSuccess)
+            if (r != vk::Result::eSuccess) {
                 std::cerr << "Error mapping memory" << vk::to_string(r);
+                goto error;
+            }
         }
     }
 
     if (!isHostVisible) {
         memory.stagingBuffer = ggml_vk_allocate_buffer(size);
+        if (!memory.stagingBuffer)
+            goto error;
+
         vk::MemoryRequirements memoryRequirements = komputeManager()->device()->getBufferMemoryRequirements(*memory.stagingBuffer);
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible |
                                                       vk::MemoryPropertyFlagBits::eHostCoherent |
                                                       vk::MemoryPropertyFlagBits::eHostCached;
         memory.stagingMemory = ggml_vk_allocate(size, memoryPropertyFlags, memoryRequirements, &isHostVisible);
+        if (!memory.stagingMemory)
+            goto error;
+
         komputeManager()->device()->bindBufferMemory(*memory.stagingBuffer, *memory.stagingMemory, 0);
         vk::Result r = komputeManager()->device()->mapMemory(*memory.stagingMemory, 0, size, vk::MemoryMapFlags(), &memory.data);
-        if (r != vk::Result::eSuccess)
+        if (r != vk::Result::eSuccess) {
             std::cerr << "Error mapping memory" << vk::to_string(r);
+            goto error;
+        }
     }
 
     memory.size = size;
     return memory;
+
+error:
+    ggml_vk_free_memory(memory);
+    return {};
 }
 
 static void ggml_vk_free_memory(ggml_vk_memory &memory)
 {
-    komputeManager()->device()->destroy(
-      *memory.primaryBuffer,
-      (vk::Optional<const vk::AllocationCallbacks>)nullptr);
+    if (memory.primaryBuffer) {
+        komputeManager()->device()->destroy(
+          *memory.primaryBuffer,
+          (vk::Optional<const vk::AllocationCallbacks>)nullptr);
+    }
     if (memory.stagingBuffer) {
         komputeManager()->device()->destroy(
           *memory.stagingBuffer,
           (vk::Optional<const vk::AllocationCallbacks>)nullptr);
     }
-    komputeManager()->device()->freeMemory(
-      *memory.primaryMemory,
-      (vk::Optional<const vk::AllocationCallbacks>)nullptr);
+    if (memory.primaryMemory) {
+        komputeManager()->device()->freeMemory(
+          *memory.primaryMemory,
+          (vk::Optional<const vk::AllocationCallbacks>)nullptr);
+    }
     if (memory.stagingMemory) {
         komputeManager()->device()->freeMemory(
           *memory.stagingMemory,
