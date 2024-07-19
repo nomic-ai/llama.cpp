@@ -7747,25 +7747,44 @@ static bool llm_load_tensors(
 static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
     LLM_ARCH_LLAMA,
     LLM_ARCH_FALCON,
-    LLM_ARCH_BAICHUAN,
+    // LLM_ARCH_GROK, -- untested
     LLM_ARCH_GPT2,
-    // LLM_ARCH_MPT, -- needs GGML_OP_ALIBI
+    // LLM_ARCH_GPTJ, -- no inference code
+    LLM_ARCH_GPTNEOX,
+    // LLM_ARCH_MPT, -- no ALiBi support
+    LLM_ARCH_BAICHUAN,
     LLM_ARCH_STARCODER,
-    // LLM_ARCH_PERSIMMON, -- needs GGML_OP_CONCAT
-    // LLM_ARCH_REFACT, -- needs GGML_OP_ALIBI
+    // LLM_ARCH_REFACT, -- no ALiBi support
     LLM_ARCH_BERT,
     LLM_ARCH_NOMIC_BERT,
-    // LLM_ARCH_BLOOM, -- needs GGML_OP_ALIBI
+    // LLM_ARCH_JINA_BERT_V2, -- no ALiBi support
+    // LLM_ARCH_BLOOM, -- no ALiBi support
     LLM_ARCH_STABLELM,
     LLM_ARCH_QWEN,
     LLM_ARCH_QWEN2,
+    // LLM_ARCH_QWEN2MOE, -- no MoE support
     LLM_ARCH_PHI2,
+    // LLM_ARCH_PHI3, -- no YaRN support
     // LLM_ARCH_PLAMO, -- unable to test
     LLM_ARCH_CODESHELL,
     LLM_ARCH_ORION,
     LLM_ARCH_INTERNLM2,
     LLM_ARCH_MINICPM,
     LLM_ARCH_GEMMA,
+    LLM_ARCH_GEMMA2,
+    LLM_ARCH_STARCODER2,
+    // LLM_ARCH_MAMBA, -- no SSM_CONV
+    LLM_ARCH_XVERSE,
+    LLM_ARCH_COMMAND_R,
+    // LLM_ARCH_DBRX, -- untested
+    LLM_ARCH_OLMO,
+    LLM_ARCH_OPENELM,
+    // LLM_ARCH_ARCTIC, -- untested
+    // LLM_ARCH_DEEPSEEK2, -- no MoE support
+    LLM_ARCH_CHATGLM,
+    // LLM_ARCH_BITNET, -- unsupported quantization
+    // LLM_ARCH_T5, -- untested
+    LLM_ARCH_JAIS,
 };
 #endif
 
