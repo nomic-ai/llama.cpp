@@ -1362,7 +1362,8 @@ static void tokenizer_st_partition(const llama_vocab & vocab, std::forward_list<
     }
 }
 
-std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, std::string raw_text, bool add_special, bool parse_special) {
+std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, std::string raw_text, bool add_special,
+                                                     bool parse_special, bool insert_space) {
     std::vector<llama_vocab::id> output;
     std::forward_list<fragment_buffer_variant> fragment_buffer;
 
@@ -1379,7 +1380,7 @@ std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, 
                 // tokenizer.encode('', add_special_tokens=True)  returns [1]
                 // tokenizer.encode('', add_special_tokens=False) returns []
 
-                bool is_prev_special = true;  // prefix with space if first token
+                bool is_prev_special = insert_space;  // prefix with space if first token
 
                 if (add_special && vocab.tokenizer_add_bos) {
                     GGML_ASSERT(vocab.special_bos_id != -1);
@@ -1636,8 +1637,9 @@ int32_t llama_tokenize_impl(
                  llama_token * tokens,
                      int32_t   n_tokens_max,
                         bool   add_special,
-                        bool   parse_special) {
-    auto res = llama_tokenize_internal(vocab, std::string(text, text_len), add_special, parse_special);
+                        bool   parse_special,
+                        bool   insert_space) {
+    auto res = llama_tokenize_internal(vocab, std::string(text, text_len), add_special, parse_special, insert_space);
     if (n_tokens_max < (int) res.size()) {
         // LLAMA_LOG_ERROR("%s: too many tokens\n", __func__);
         return -((int) res.size());
