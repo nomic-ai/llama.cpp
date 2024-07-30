@@ -87,7 +87,8 @@ std::vector<llama_vocab::id> llama_tokenize_internal(
         const llama_vocab & vocab,
         std::string raw_text,
         bool add_special,
-        bool parse_special = false);
+        bool parse_special = false,
+        bool insert_space = true);
 
 // TODO: move the API below as member functions of llama_vocab
 llama_token llama_byte_to_token_impl(const llama_vocab & vocab, uint8_t ch);
@@ -125,7 +126,8 @@ int32_t llama_tokenize_impl(
                      llama_token * tokens,
                          int32_t   n_tokens_max,
                             bool   add_special,
-                            bool   parse_special);
+                            bool   parse_special,
+                            bool   insert_space = true);
 
 // does not write null-terminator to buf
 int32_t llama_token_to_piece_impl(

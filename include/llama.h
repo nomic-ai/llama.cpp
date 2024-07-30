@@ -941,6 +941,16 @@ extern "C" {
                             bool   add_special,
                             bool   parse_special);
 
+    LLAMA_API int32_t llama_tokenize_gpt4all(
+        const struct llama_model * model,
+                      const char * text,
+                         int32_t   text_len,
+                     llama_token * tokens,
+                         int32_t   n_tokens_max,
+                            bool   add_special,
+                            bool   parse_special,
+                            bool   insert_space);
+
     // Token Id -> Piece.
     // Uses the vocabulary in the provided context.
     // Does not write null terminator to the buffer.

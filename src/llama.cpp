@@ -21413,6 +21413,18 @@ int32_t llama_tokenize(
     return llama_tokenize_impl(model->vocab, text, text_len, tokens, n_tokens_max, add_special, parse_special);
 }
 
+int32_t llama_tokenize_gpt4all(
+    const struct llama_model * model,
+                  const char * text,
+                     int32_t   text_len,
+                 llama_token * tokens,
+                     int32_t   n_tokens_max,
+                        bool   add_special,
+                        bool   parse_special,
+                        bool   insert_space) {
+    return llama_tokenize_impl(model->vocab, text, text_len, tokens, n_tokens_max, add_special, parse_special, insert_space);
+}
+
 int32_t llama_token_to_piece(
     const struct llama_model * model,
                  llama_token   token,
