@@ -7001,28 +7001,32 @@ static bool llm_load_tensors(
     } else
 #endif
     {
-        ggml_backend_buffer_type_t split_buft;
-        if (split_mode == LLAMA_SPLIT_MODE_ROW) {
-            split_buft = llama_default_buffer_type_split(model, main_gpu, tensor_split);
-        } else {
-            // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
-            split_buft = llama_default_buffer_type_offload(model, main_gpu);
-        }
+        ggml_backend_buffer_type_t split_buft = nullptr;
+        if (i_gpu_start < n_layer) {
+            if (split_mode == LLAMA_SPLIT_MODE_ROW) {
+                split_buft = llama_default_buffer_type_split(model, main_gpu, tensor_split);
+            } else {
+                // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
+                split_buft = llama_default_buffer_type_offload(model, main_gpu);
+            }
 #ifdef GGML_USE_KOMPUTE
-        // we can fall back to CPU buffer type in some cases
-        if (!strcmp(ggml_backend_buft_name(split_buft), "CPU")) {
-            model.using_gpu = false;
-        }
+            // we can fall back to CPU buffer type in some cases
+            if (!strcmp(ggml_backend_buft_name(split_buft), "CPU")) {
+                model.using_gpu = false;
+            }
 #endif
-        // assign the repeating layers
-        for (int i = i_gpu_start; i < n_layer; ++i) {
-            model.buft_layer[i] = {
-                split_buft,
-                llama_default_buffer_type_offload(model, main_gpu)
-            };
+            // assign the repeating layers
+            for (int i = i_gpu_start; i < n_layer; ++i) {
+                model.buft_layer[i] = {
+                    split_buft,
+                    llama_default_buffer_type_offload(model, main_gpu)
+                };
+            }
         }
+
         // assign the output layer
         if (n_gpu_layers > n_layer) {
+            assert(split_buft);
             model.buft_output = {
                 split_buft,
                 llama_default_buffer_type_offload(model, main_gpu)
