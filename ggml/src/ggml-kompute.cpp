@@ -1453,6 +1453,8 @@ static bool ggml_vk_supports_op(const struct ggml_tensor * op) {
         case GGML_OP_TRANSPOSE:
         case GGML_OP_PERMUTE:
             return true; // noop -> dst type does not matter
+        default:
+            ;
     }
 
     switch (op->type) {
