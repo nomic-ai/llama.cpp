@@ -9029,6 +9029,7 @@ static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
     LLM_ARCH_GPT2,
     // LLM_ARCH_GPTJ, -- no inference code
     LLM_ARCH_GPTNEOX,
+    // LLM_ARCH_GRANITE_MOE, -- no MoE support
     // LLM_ARCH_MPT, -- no ALiBi support
     LLM_ARCH_BAICHUAN,
     LLM_ARCH_STARCODER,
@@ -9056,6 +9057,7 @@ static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
     LLM_ARCH_COMMAND_R,
     // LLM_ARCH_DBRX, -- untested
     LLM_ARCH_OLMO,
+    // LLM_ARCH_OLMOE, -- no MoE support
     LLM_ARCH_OPENELM,
     // LLM_ARCH_ARCTIC, -- untested
     // LLM_ARCH_DEEPSEEK2, -- no MoE support
