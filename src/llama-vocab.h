@@ -87,12 +87,14 @@ struct llama_vocab {
                   llama_token * tokens,
                       int32_t   n_tokens_max,
                          bool   add_special,
-                         bool   parse_special) const;
+                         bool   parse_special,
+                         bool   insert_space = true) const;
 
     std::vector<llama_token> tokenize(
             const std::string & raw_text,
                          bool   add_special,
-                         bool   parse_special = false) const;
+                         bool   parse_special = false,
+                         bool   insert_space = true) const;
 
     // does not write null-terminator to buf
     int32_t token_to_piece(

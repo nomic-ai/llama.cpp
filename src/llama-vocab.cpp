@@ -1295,7 +1295,8 @@ struct llama_vocab::impl {
     std::vector<llama_token> tokenize(
             const std::string & raw_text,
                          bool   add_special,
-                         bool   parse_special = false) const;
+                         bool   parse_special = false,
+                         bool   insert_space = true) const;
 
     int32_t tokenize(
                    const char * text,
@@ -2314,7 +2315,8 @@ static std::string llama_decode_text(const std::string & text) {
 std::vector<llama_token> llama_vocab::impl::tokenize(
         const std::string & raw_text,
         bool add_special,
-        bool parse_special) const {
+        bool parse_special,
+        bool insert_space) const {
     GGML_ASSERT(tokenizer && "Tokenizer not initialized. Call llama_vocab::init_tokenizer() first.");
 
     std::vector<llama_token> output;
@@ -2333,7 +2335,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 // tokenizer.encode('', add_special_tokens=True)  returns [1]
                 // tokenizer.encode('', add_special_tokens=False) returns []
 
-                bool is_prev_special = true;  // prefix with space if first token
+                bool is_prev_special = insert_space;  // prefix with space if first token
 
                 if (add_special && add_bos) {
                     GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
@@ -2956,8 +2958,9 @@ int32_t llama_vocab::tokenize(
                  llama_token * tokens,
                      int32_t   n_tokens_max,
                         bool   add_special,
-                        bool   parse_special) const {
-    auto res = tokenize(std::string(text, text_len), add_special, parse_special);
+                        bool   parse_special,
+                        bool   insert_space) const {
+    auto res = tokenize(std::string(text, text_len), add_special, parse_special, insert_space);
     if (n_tokens_max < (int) res.size()) {
         // LLAMA_LOG_ERROR("%s: too many tokens\n", __func__);
         return -((int) res.size());
@@ -2973,8 +2976,9 @@ int32_t llama_vocab::tokenize(
 std::vector<llama_token> llama_vocab::tokenize(
         const std::string & raw_text,
         bool add_special,
-        bool parse_special) const {
-    return pimpl->tokenize(raw_text, add_special, parse_special);
+        bool parse_special,
+        bool insert_space) const {
+    return pimpl->tokenize(raw_text, add_special, parse_special, insert_space);
 }
 
 const std::string & llama_vocab::token_to_piece(llama_token token) const {
@@ -3227,6 +3231,18 @@ int32_t llama_tokenize(
                         bool   add_special,
                         bool   parse_special) {
     return vocab->tokenize(text, text_len, tokens, n_tokens_max, add_special, parse_special);
+}
+
+int32_t llama_tokenize_gpt4all(
+    const struct llama_vocab * vocab,
+                  const char * text,
+                     int32_t   text_len,
+                 llama_token * tokens,
+                     int32_t   n_tokens_max,
+                        bool   add_special,
+                        bool   parse_special,
+                        bool   insert_space) {
+    return vocab->tokenize(text, text_len, tokens, n_tokens_max, add_special, parse_special, insert_space);
 }
 
 int32_t llama_token_to_piece(
