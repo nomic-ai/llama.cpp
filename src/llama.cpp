@@ -9030,6 +9030,7 @@ static const llm_arch LLM_KOMPUTE_SUPPORTED_ARCHES[] {
     // LLM_ARCH_GPTJ, -- no inference code
     LLM_ARCH_GPTNEOX,
     // LLM_ARCH_GRANITE_MOE, -- no MoE support
+    LLM_ARCH_GRANITE,
     // LLM_ARCH_MPT, -- no ALiBi support
     LLM_ARCH_BAICHUAN,
     LLM_ARCH_STARCODER,
